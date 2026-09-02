@@ -1,0 +1,12 @@
+fastapi>=0.115,<1
+uvicorn[standard]>=0.34,<1
+opencv-contrib-python>=4.10,<5
+pyserial>=3.5,<4
+numpy>=1.26,<3
+pillow>=10,<13
+reportlab>=4,<5
+onnxruntime>=1.20,<2
+torch>=2.4,<3
+torchvision>=0.19,<1
+transformers>=4.48,<6
+pyyaml>=6,<7

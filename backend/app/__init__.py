@@ -1,0 +1,2 @@
+"""Jewellery capture edge application."""
+

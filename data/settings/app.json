@@ -1,0 +1,67 @@
+{
+  "camera": {
+    "index": 0,
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "rotation": 270,
+    "preview_quality": 78,
+    "power_line_hz": 50,
+    "shutter_denominator": 100,
+    "driver_managed_exposure": true,
+    "software_anti_flicker": false,
+    "anti_flicker_row_normalize": false,
+    "anti_flicker_temporal_alpha": 0.08,
+    "anti_flicker_gain_limit": 1.35,
+    "temporal_average_frames": 90
+  },
+  "scale": {
+    "port": "COM12",
+    "baud_rate": 9600
+  },
+  "rois": {
+    "processing": {
+      "x": 0.05948061943218483,
+      "y": 0.16769137239899665,
+      "width": 0.8301338569470961,
+      "height": 0.4348120722999078
+    },
+    "apriltag": {
+      "x": 0.07124252075855972,
+      "y": 0.1769877625598618,
+      "width": 0.06977008388454176,
+      "height": 0.03567788026952215
+    }
+  },
+  "apriltag": {
+    "family": "tag36h11",
+    "id": 1,
+    "width_mm": 10.0,
+    "height_mm": 10.0
+  },
+  "analysis": {
+    "item_separation": {
+      "min_area_ratio": 0.00045,
+      "min_area_px": 350,
+      "padding_px": 18
+    },
+    "color_correction": {
+      "saturation": 1.15,
+      "contrast": 1.1,
+      "brightness": 16.0
+    },
+    "normalization": {
+      "white_balance": true,
+      "clahe_clip_limit": 1.8,
+      "shadow_gamma": 0.92,
+      "color_boost": 1.15,
+      "green_recovery": 1.15,
+      "dark_green_recovery": 1.2
+    },
+    "background_calibration": null,
+    "learned_stone_profiles": []
+  },
+  "time": {
+    "source": "network-synchronized system clock"
+  }
+}
