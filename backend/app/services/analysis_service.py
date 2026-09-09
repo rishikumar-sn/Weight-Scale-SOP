@@ -19,6 +19,7 @@ from PIL import Image
 from ..analysis.vision import separate_jewellery_items
 from ..core.config import PROJECT_ROOT
 from ..domain.workflow import route_for_label
+from ..domain.weights import stone_weight_fields, weight_summary
 
 
 for module_path in (
@@ -567,6 +568,7 @@ class OnnxBeadDetector:
                 else None
             ),
             "detections": detections,
+            "count": len(detections),
             "verification_fallback_used": red_fallback_used,
             "decision_source": decision_source,
             "decision_reason": (
@@ -598,8 +600,9 @@ class OnnxBeadDetector:
 
 
 class AnalysisService:
-    def __init__(self, repository) -> None:
+    def __init__(self, repository, artifact_finalizer=None) -> None:
         self.repository = repository
+        self.artifact_finalizer = artifact_finalizer
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="jewellery-analysis")
         self._model_lock = threading.RLock()
         self._classifier: JewelryZeroShotClassifier | None = None
@@ -1103,6 +1106,7 @@ class AnalysisService:
             "risk_level": str(risk.get("level") or "NONE"),
             "risk_status": str(risk.get("status") or "NO RISK - NO STONES DETECTED"),
             "stone_area_mm2": measurements.get("total_area_mm2") if stones_found else None,
+            **stone_weight_fields(measurements, stones_found),
             "measurement_basis": risk.get("basis"),
             "image": str(gallery_path),
             "report": report_path,
@@ -1167,6 +1171,26 @@ class AnalysisService:
                         result[key] = result_items[0][key]
             state = self.repository.get(capture_id) or state
             state["result"] = result
+            result["weights"] = weight_summary(state)
+            if self.artifact_finalizer is not None:
+                self._update_job(
+                    state,
+                    "Optimizing storage",
+                    "Compressing completed images and report",
+                    97,
+                    3,
+                )
+                try:
+                    state["storage"] = self.artifact_finalizer.finalize(state)
+                except Exception as exc:  # Analysis results remain usable if optimization fails.
+                    state["storage"] = {
+                        "status": "partial",
+                        "lossless": True,
+                        "processed_after_results": True,
+                        "processed_after_analysis": True,
+                        "errors": [{"path": capture_id, "message": str(exc)}],
+                        "presentation_artifacts": "compressed_on_demand",
+                    }
             state["status"] = "complete"
             warnings = sum(len(item.get("errors") or []) for item in result_items)
             state["job"] = {

@@ -226,3 +226,10 @@ footer { padding: 0 64px 18px; text-align: right; color: var(--muted); font-size
   .confirmationActions { grid-template-columns: 1fr; }
   .completeBadge { display: none; }
 }
+/* Shared capture weights, including the requested stone allowance. */
+.weightSummary { margin: 20px 0; overflow-x: auto; }
+.weightTable { width: 100%; border-collapse: collapse; }
+.weightTable caption { text-align: left; font-weight: 700; margin-bottom: 10px; }
+.weightTable th, .weightTable td { padding: 12px; border: 1px solid #d8c7a7; text-align: left; }
+.weightTable thead { background: #f6ebd5; color: #6f4b12; }
+.weightSummary p { font-size: 0.9rem; line-height: 1.5; }

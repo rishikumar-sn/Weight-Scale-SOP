@@ -281,6 +281,9 @@ class CalibApp(QWidget):
         meas_root = QVBoxLayout()
 
         meas_btn_row = QHBoxLayout()
+        self.jewel_type = QComboBox()
+        self.jewel_type.addItems(["Bangle", "Finger Ring"])
+        meas_btn_row.addWidget(self.jewel_type)
         self.btn_measure = QPushButton("📏 Detect & Measure OD / ID")
         self.btn_measure.setEnabled(False)
         self.btn_preview = QPushButton("🔍 Preview Filter")
@@ -656,6 +659,10 @@ class CalibApp(QWidget):
         if self.image_bgr is None or self.mm_per_px is None:
             return
 
+        if self.jewel_type.currentText() == "Finger Ring":
+            self._measure_finger_ring()
+            return
+
         gray = cv2.cvtColor(self.image_bgr, cv2.COLOR_BGR2GRAY)
         corrected = self._preprocess_gray(gray)
 
@@ -739,6 +746,37 @@ class CalibApp(QWidget):
             f"shadow {'on' if self.remove_shadows else 'off'} str={self.shadow_strength}  |  "
             f"{clahe_info})\n"
             f"{msg}"
+        )
+
+    def _measure_finger_ring(self):
+        if __package__:
+            from .bangle_detector import finger_ring_circle_detection, draw_results
+        else:
+            from bangle_detector import finger_ring_circle_detection, draw_results
+        image = self.image_bgr.copy()
+        if self.aruco_corners is not None:
+            background = tuple(int(v) for v in np.median(image.reshape(-1, 3), axis=0))
+            for corners in self.aruco_corners:
+                points = corners[0]
+                center = points.mean(axis=0)
+                cv2.fillPoly(image, [(center + (points - center) * 1.3).astype(np.int32)], background)
+        try:
+            outer, inner, _ = finger_ring_circle_detection(image, self.mm_per_px)
+        except RuntimeError as exc:
+            self.canvas.set_overlay(self.image_bgr)
+            self.txt_result.setPlainText(str(exc))
+            return
+        from dataclasses import asdict
+        od, id_ = outer.diameter * self.mm_per_px, inner.diameter * self.mm_per_px
+        result = {"outer": asdict(outer), "inner": asdict(inner),
+                  "od_px": outer.diameter, "id_px": inner.diameter,
+                  "od_mm": od, "id_mm": id_, "detection_mode": "finger_ring_edge_ellipse"}
+        self.canvas.set_overlay(draw_results(self.image_bgr, result))
+        self.txt_result.setPlainText(
+            f"Finger Ring (visible band ellipse fit; scale {self.mm_per_px:.6f} mm/px)\n"
+            f"Outer Diameter (OD): {od:.3f} mm\n"
+            f"Inner Diameter (ID): {id_:.3f} mm\n"
+            f"Wall thickness: {(od - id_) / 2:.3f} mm"
         )
 
     # ---------- Processing helpers (ported from ui_otsu (1).py) ----------

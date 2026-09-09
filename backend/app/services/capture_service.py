@@ -20,11 +20,12 @@ from ..analysis.vision import (
 
 
 class CaptureService:
-    def __init__(self, camera, scale, settings_store, repository) -> None:
+    def __init__(self, camera, scale, settings_store, repository, artifact_finalizer=None) -> None:
         self.camera = camera
         self.scale = scale
         self.settings_store = settings_store
         self.repository = repository
+        self.artifact_finalizer = artifact_finalizer
 
     @staticmethod
     def _save(path: Path, image: np.ndarray) -> str:
@@ -233,5 +234,17 @@ class CaptureService:
                 "error": None,
             },
         }
+        if self.artifact_finalizer is not None:
+            try:
+                state["storage"] = self.artifact_finalizer.finalize(state)
+            except Exception as exc:  # Storage optimization must not lose a tare result.
+                state["storage"] = {
+                    "status": "partial",
+                    "lossless": True,
+                    "processed_after_results": True,
+                    "processed_after_analysis": False,
+                    "errors": [{"path": str(source_dir), "message": str(exc)}],
+                    "presentation_artifacts": "compressed_on_demand",
+                }
         self.repository.save(state)
         return state

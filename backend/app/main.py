@@ -23,6 +23,7 @@ from .hardware.camera import CameraService
 from .hardware.scale import ScaleService
 from .services.analysis_service import AnalysisService
 from .services.capture_service import CaptureService
+from .services.compression_service import ArtifactCompressionService
 from .services.report_service import ReportService
 from .storage.repository import CaptureRepository
 
@@ -31,9 +32,10 @@ settings_store = SettingsStore()
 repository = CaptureRepository(DATABASE_PATH, SESSIONS_DIR)
 camera = CameraService(settings_store.get)
 scale = ScaleService(settings_store.get)
-captures = CaptureService(camera, scale, settings_store, repository)
-analysis = AnalysisService(repository)
 reports = ReportService()
+artifact_compression = ArtifactCompressionService(repository)
+captures = CaptureService(camera, scale, settings_store, repository, artifact_compression)
+analysis = AnalysisService(repository, artifact_compression)
 
 
 def _state(capture_id: str) -> dict[str, Any]:

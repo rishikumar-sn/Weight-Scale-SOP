@@ -32,6 +32,7 @@ data/camera-flicker-diagnostic/
 data/classification-evaluation/
 data/stone-comparisons/
 data/validation_stone_masks/
+data/ring-validation/
 
 *.log
 *.tmp

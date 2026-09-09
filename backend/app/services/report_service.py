@@ -15,6 +15,7 @@ from reportlab.lib.units import mm
 from reportlab.platypus import Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from ..core.config import PROJECT_ROOT
+from ..domain.weights import weight_summary, weight_rows
 
 
 class ReportService:
@@ -197,7 +198,24 @@ class ReportService:
         time_font = self._fit_text(draw, time_text, available_width // 2 - px(56), px(32), bold=True)
         draw.text((meta_mid + px(28), meta_top + px(91)), time_text, fill=ink, font=time_font)
 
-        types_top = meta_top + meta_height + px(54)
+        weights_top = meta_top + meta_height + px(24)
+        stone_analysis_applies = any(
+            (item.get("route") or {}).get("stones") or item.get("stones")
+            for item in (items or [result])
+        )
+        rows = weight_rows(weight_summary(state)) if count == 1 and stone_analysis_applies else []
+        row_height = px(62)
+        column_offsets = [0, int(available_width * 0.40), int(available_width * 0.66), available_width]
+        for row_index, row in enumerate(rows):
+            top = weights_top + row_index * row_height
+            for column, value in enumerate(row):
+                left, right = x + column_offsets[column], x + column_offsets[column + 1]
+                draw.rectangle((left, top, right, top + row_height),
+                               fill=navy if row_index == 0 else card, outline=line_color)
+                font = self._fit_text(draw, value, right - left - px(16), px(22), bold=row_index == 0)
+                draw.text((left + px(8), top + px(16)), value,
+                          fill="white" if row_index == 0 else ink, font=font)
+        types_top = weights_top + len(rows) * row_height + px(30)
         draw.text((x, types_top), "JEWELLERY DETAILS", fill=navy, font=section_font)
         draw.rectangle((x, types_top + px(45), x + px(72), types_top + px(51)), fill=gold)
         item_top = types_top + px(82)
@@ -227,8 +245,13 @@ class ReportService:
                 jewel_reference, fill="white", font=number_font,
             )
             type_font = self._fit_text(draw, label, available_width - px(125), px(34), bold=True)
-            text_y = top + (item_height - type_font.size) // 2 - px(4)
+            beads_item = (items[index - 1].get("beads") or {}) if index <= len(items) else {}
+            text_y = top + (item_height - type_font.size) // 2 - px(4) - (px(16) if beads_item else 0)
             draw.text((badge_x + badge_size + px(22), text_y), label, fill=ink, font=type_font)
+            if beads_item:
+                bead_count = beads_item.get("count", len(beads_item.get("detections") or []))
+                draw.text((badge_x + badge_size + px(22), top + px(65)), f"Bead count: {bead_count}",
+                          fill=muted, font=self._result_font(px(22)))
 
         if self.client_logo.is_file():
             with PillowImage.open(self.client_logo) as logo_source:
@@ -241,7 +264,7 @@ class ReportService:
                 output.paste(logo, (logo_x, logo_y))
 
         buffer = io.BytesIO()
-        output.save(buffer, format="PNG", optimize=True)
+        output.save(buffer, format="PNG", optimize=True, compress_level=9)
         buffer.seek(0)
         return buffer
 
@@ -264,6 +287,7 @@ class ReportService:
             topMargin=14 * mm,
             bottomMargin=14 * mm,
             title="Jewellery Capture Report",
+            pageCompression=1,
         )
         styles = getSampleStyleSheet()
         title = ParagraphStyle(
@@ -320,8 +344,23 @@ class ReportService:
         ]))
         story.extend([Paragraph("Capture details", heading), table])
 
-        result_image_buffer = self.generate_result_image(state)
-        result_capture = Image(result_image_buffer)
+        result = state.get("result") or {}
+        if any(
+            (item.get("route") or {}).get("stones") or item.get("stones")
+            for item in (result.get("items") or [result])
+        ):
+            weights = weight_summary(state)
+            weights_table = Table(weight_rows(weights), colWidths=[60 * mm, 45 * mm, 60 * mm])
+            weights_table.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F6EBD5")),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#D8C7A7")),
+                ("PADDING", (0, 0), (-1, -1), 7),
+            ]))
+            story.extend([Paragraph("Jewellery weights (grams)", heading), weights_table,
+                          Paragraph(weights["note"], body)])
+
+        result_capture = Image(self.generate_result_image(state))
         result_capture._restrictSize(177 * mm, 140 * mm)
         result_capture.hAlign = "CENTER"
         if result_capture:
@@ -371,6 +410,8 @@ class ReportService:
                     story.append(Table(rows, colWidths=[60 * mm, 105 * mm]))
                 beads_item = item.get("beads") or {}
                 if beads_item:
+                    bead_count = beads_item.get("count", len(beads_item.get("detections") or []))
+                    story.append(Paragraph(f"Bead count: {bead_count}", body))
                     story.append(
                         Paragraph(
                             "Beads detected"
@@ -382,6 +423,12 @@ class ReportService:
                 stones_item = item.get("stones") or {}
                 if stones_item:
                     story.append(Paragraph(str(stones_item.get("risk_status") or "Stone analysis complete"), body))
+                    if stones_item.get("estimated_weight_g") is not None:
+                        story.append(Paragraph(
+                            f"Estimated stone weight: {stones_item['estimated_weight_g']:.2f} g; "
+                            f"range: {stones_item['weight_min_g']:.2f} - {stones_item['weight_max_g']:.2f} g",
+                            body,
+                        ))
                 for warning in item.get("errors") or []:
                     story.append(Paragraph(
                         f"Warning ({warning.get('stage', 'analysis')}): {warning.get('message', '')}",
@@ -418,6 +465,7 @@ class ReportService:
 
         beads = (result.get("beads") or {}) if not result_items else {}
         if beads:
+            story.append(Paragraph(f"Bead count: {beads.get('count', len(beads.get('detections') or []))}", body))
             story.extend([
                 Paragraph("Bead analysis", heading),
                 Paragraph(

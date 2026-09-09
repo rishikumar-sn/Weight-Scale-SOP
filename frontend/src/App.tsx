@@ -27,6 +27,24 @@ function StatusDot({ ok }: { ok: boolean }) {
   return <span className={`statusDot ${ok ? "ok" : "bad"}`} />;
 }
 
+function WeightTable({ weights, gross }: { weights?: Record<string, any>; gross?: number }) {
+  const w = weights || { gross_g: gross, note: "Stone and net estimates unavailable for this capture." };
+  const grams = (value: any) => typeof value === "number" && Number.isFinite(value) ? `${value.toFixed(2)} g` : "Unavailable";
+  const range = (low: any, high: any) => low == null || high == null ? "Unavailable" : low === high ? grams(low) : `${grams(low)} – ${grams(high)}`;
+  return <div className="weightSummary">
+    <table className="weightTable">
+      <caption>Jewellery weights (grams)</caption>
+      <thead><tr><th scope="col">Weight</th><th scope="col">Value</th><th scope="col">Range</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">Gross (scale)</th><td>{grams(w.gross_g)}</td><td>—</td></tr>
+        <tr><th scope="row">Stone (estimated average)</th><td>{grams(w.stone_g)}</td><td>{range(w.stone_min_g, w.stone_max_g)}</td></tr>
+        <tr><th scope="row">Net (estimated)</th><td>{grams(w.net_g)}</td><td>{range(w.net_min_g, w.net_max_g)}</td></tr>
+      </tbody>
+    </table>
+    <p>{w.note}</p>
+  </div>;
+}
+
 function ResultImage({ src, alt, label }: { src?: string | null; alt: string; label?: string }) {
   if (!src) return null;
   return (
@@ -525,7 +543,7 @@ export default function App() {
                   <div className="resultsHeadingAside">
                     <div className="resultWeightBadge">
                       <span>Captured weight</span>
-                      <strong>{active?.weight_g?.toFixed(2)} g</strong>
+                      <strong>{active?.weight_g != null ? `${active.weight_g.toFixed(2)} g` : "Unavailable"}</strong>
                     </div>
                     <div className="resultsTopActions">
                       <a className="primary linkButton" href={`${media.result_image}?download=true`}>Download image</a>
@@ -539,6 +557,7 @@ export default function App() {
                   alt="Captured jewellery with jewel details"
                   label="Captured image and details"
                 />
+                {result.count === 1 && (result.items?.[0]?.route?.stones || result.items?.[0]?.stones || result.stones) && <WeightTable weights={result.weights} gross={active?.weight_g} />}
                 <div className="itemResults">
                   {(result.items || []).map((item: any, itemPosition: number) => {
                     const itemMedia = (media.items || [])[itemPosition] || {};
@@ -558,6 +577,8 @@ export default function App() {
                           {item.dimensions?.outer_diameter_mm != null && <div><span>Outer diameter</span><strong>{Number(item.dimensions.outer_diameter_mm).toFixed(2)} mm</strong></div>}
                           {item.dimensions?.inner_diameter_mm != null && <div><span>Inner diameter</span><strong>{Number(item.dimensions.inner_diameter_mm).toFixed(2)} mm</strong></div>}
                           {item.beads && <div><span>Bead analysis</span><strong>{item.beads.beads_detected ? "Beads detected" : "Beads not detected"}</strong></div>}
+                          {item.beads && <div><span>Bead count</span><strong>{item.beads.count ?? item.beads.detections?.length ?? "Unavailable"}</strong></div>}
+                          {result.count > 1 && item.stones?.estimated_weight_g != null && <div><span>Estimated stone weight</span><strong>{item.stones.weight_min_g.toFixed(2)} – {item.stones.weight_max_g.toFixed(2)} g</strong></div>}
                           {item.stones?.stone_area_mm2 != null && <div><span>Detected stone area</span><strong>{Number(item.stones.stone_area_mm2).toFixed(2)} mm²</strong></div>}
                           {item.stones && <div className={`wide riskTag risk${item.stones.risk_level || "NONE"}`}><span>Stone analysis</span><strong>{item.stones.risk_status}</strong></div>}
                         </div>
