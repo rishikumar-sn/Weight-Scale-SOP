@@ -78,10 +78,14 @@ export default function App() {
   const [tareMode, setTareMode] = useState<TareMode>("pledge");
   const [tareCaptures, setTareCaptures] = useState<Partial<Record<TareMode, CaptureState>>>({});
   const [currentTime, setCurrentTime] = useState(() => new Date());
+  const [videoSrc, setVideoSrc] = useState("/api/video");
+  const [cameraReconnecting, setCameraReconnecting] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const cameraAreaRef = useRef<HTMLDivElement>(null);
   const cameraImageRef = useRef<HTMLImageElement>(null);
   const shutdownRequestedRef = useRef(false);
+  const videoRetryRef = useRef<number | null>(null);
+  const cameraWasConnectedRef = useRef(false);
   const dragStart = useRef<{ x: number; y: number } | null>(null);
   const draft = useRef<Roi | null>(null);
 
@@ -89,6 +93,46 @@ export default function App() {
     const timer = window.setInterval(() => setCurrentTime(new Date()), 1000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    const connected = Boolean(live.camera?.connected);
+    if (connected && !cameraWasConnectedRef.current) {
+      setVideoSrc(`/api/video?reconnect=${Date.now()}`);
+    }
+    cameraWasConnectedRef.current = connected;
+  }, [live.camera?.connected]);
+
+  useEffect(() => () => {
+    if (videoRetryRef.current !== null) window.clearTimeout(videoRetryRef.current);
+  }, []);
+
+  function retryVideoStream() {
+    if (shutdownRequestedRef.current || videoRetryRef.current !== null) return;
+    videoRetryRef.current = window.setTimeout(() => {
+      videoRetryRef.current = null;
+      setVideoSrc(`/api/video?retry=${Date.now()}`);
+    }, 2000);
+  }
+
+  async function reconnectCamera() {
+    if (cameraReconnecting || shutdownRequestedRef.current) return;
+    setCameraReconnecting(true);
+    setError("");
+    setMessage("Reconnecting the camera...");
+    setLive((current: any) => ({
+      ...current,
+      camera: { ...(current.camera || {}), connected: false, status: "Camera reconnecting" },
+    }));
+    try {
+      await requestJson("/api/camera/reconnect", { method: "POST" });
+      setVideoSrc(`/api/video?manual-reconnect=${Date.now()}`);
+      setMessage("Camera reconnect requested. The live view will return when the camera is available.");
+    } catch (reason: any) {
+      setError(reason.message);
+    } finally {
+      setCameraReconnecting(false);
+    }
+  }
 
   useEffect(() => {
     requestJson("/api/settings").then((data) => {
@@ -99,10 +143,13 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    let disposed = false;
+    let socket: WebSocket | null = null;
+    let reconnectTimer: number | null = null;
     const protocol = location.protocol === "https:" ? "wss" : "ws";
-    const socket = new WebSocket(`${protocol}://${location.host}/ws/live`);
-    socket.onmessage = (event) => {
-      const payload = JSON.parse(event.data);
+
+    const applyLiveState = (payload: any) => {
+      if (disposed) return;
       setLive(payload);
       setActive((current) => {
         if (current && payload.latest?.id === current.id) return payload.latest;
@@ -112,10 +159,41 @@ export default function App() {
         return current;
       });
     };
-    socket.onerror = () => {
-      if (!shutdownRequestedRef.current) setError("Connection to the capture PC was interrupted.");
+
+    const connectSocket = () => {
+      if (disposed || shutdownRequestedRef.current) return;
+      socket = new WebSocket(`${protocol}://${location.host}/ws/live`);
+      socket.onmessage = (event) => applyLiveState(JSON.parse(event.data));
+      socket.onerror = () => socket?.close();
+      socket.onclose = () => {
+        if (disposed || shutdownRequestedRef.current) return;
+        setLive((current: any) => ({
+          ...current,
+          camera: { ...(current.camera || {}), connected: false },
+        }));
+        reconnectTimer = window.setTimeout(connectSocket, 1000);
+      };
     };
-    return () => socket.close();
+
+    const pollLiveState = () => {
+      if (disposed || shutdownRequestedRef.current) return;
+      requestJson(`/api/live?poll=${Date.now()}`, { cache: "no-store" })
+        .then(applyLiveState)
+        .catch(() => setLive((current: any) => ({
+          ...current,
+          camera: { ...(current.camera || {}), connected: false },
+        })));
+    };
+
+    connectSocket();
+    pollLiveState();
+    const pollTimer = window.setInterval(pollLiveState, 1000);
+    return () => {
+      disposed = true;
+      window.clearInterval(pollTimer);
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+      socket?.close();
+    };
   }, []);
 
   const videoContentRect = useCallback(() => {
@@ -296,7 +374,7 @@ export default function App() {
         body: JSON.stringify({ mode: tareMode }),
       });
       setTareCaptures((current) => ({ ...current, [tareMode]: captured }));
-      setMessage(`${tareMode === "pledge" ? "Pledge" : "Release"} tare image and weight saved.`);
+      setMessage(`${tareMode === "pledge" ? "Pledge" : "Release"} tare saved. ${captured.result?.packet?.message || "Packet check unavailable."}`);
     } catch (reason: any) {
       setError(reason.message);
       setMessage("Ready to try the tare capture again.");
@@ -358,6 +436,11 @@ export default function App() {
   const media = active?.media || {};
   const detectedItems = active?.classification?.items || [];
   const tareCapture = tareCaptures[tareMode];
+  const cameraReady = Boolean(
+    live.camera?.connected
+    && typeof live.camera?.frame_age_ms === "number"
+    && live.camera.frame_age_ms < 2000
+  );
   const liveDate = currentTime.toLocaleDateString("en-IN", {
     day: "2-digit", month: "2-digit", year: "numeric",
   });
@@ -392,10 +475,15 @@ export default function App() {
       <main className={`workspace ${setupOpen ? "setupWorkspace" : ""} ${stage === "results" && captureTab === "jewellery" ? "resultsWorkspace" : ""}`}>
         <section className={`cameraCard ${setupOpen ? "setupOpen" : ""}`}>
           <div className="cameraHeader">
-            <span><StatusDot ok={Boolean(live.camera?.connected)} /> Camera</span>
-            <button className="textButton" onClick={() => setSetupOpen((value) => !value)}>
-              {setupOpen ? "Close setup" : "Set camera areas"}
-            </button>
+            <span><StatusDot ok={cameraReady} /> {cameraReady ? `Camera${live.camera?.stream_fps > 0 ? ` · ${live.camera.stream_fps.toFixed(1)} fps` : ""}` : (live.camera?.status || "Camera unavailable")}</span>
+            <div className="cameraHeaderActions">
+              <button className="textButton" onClick={reconnectCamera} disabled={cameraReconnecting}>
+                {cameraReconnecting ? "Reconnecting..." : "Reconnect camera"}
+              </button>
+              <button className="textButton" onClick={() => setSetupOpen((value) => !value)}>
+                {setupOpen ? "Close setup" : "Set camera areas"}
+              </button>
+            </div>
           </div>
           <div
             className="cameraArea"
@@ -404,7 +492,13 @@ export default function App() {
               ? { aspectRatio: `${live.camera.resolution[0]} / ${live.camera.resolution[1]}` }
               : undefined}
           >
-            <img ref={cameraImageRef} src="/api/video" alt="Live jewellery camera" onLoad={drawRois} />
+            <img
+              ref={cameraImageRef}
+              src={videoSrc}
+              alt="Live jewellery camera"
+              onLoad={drawRois}
+              onError={retryVideoStream}
+            />
             <canvas
               ref={canvasRef}
               className={setupOpen ? "roiCanvas active" : "roiCanvas"}
@@ -417,6 +511,15 @@ export default function App() {
               <span>Live weight</span>
               <strong>{typeof weight === "number" ? weight.toFixed(2) : "--"}<small>g</small></strong>
             </div>
+            {!cameraReady && (
+              <div className="cameraUnavailable" role="status">
+                <strong>Camera unavailable</strong>
+                <span>Waiting for automatic reconnection</span>
+                <button className="secondary" onClick={reconnectCamera} disabled={cameraReconnecting}>
+                  {cameraReconnecting ? "Reconnecting..." : "Reconnect now"}
+                </button>
+              </div>
+            )}
           </div>
           {setupOpen && (
             <div className="roiTools">
@@ -435,7 +538,7 @@ export default function App() {
 
         <aside className="controlCard">
           <div className="deviceStrip">
-            <span><StatusDot ok={Boolean(live.camera?.connected)} />Camera ready</span>
+            <span><StatusDot ok={cameraReady} />{cameraReady ? "Camera ready" : "Camera unavailable"}</span>
             <span><StatusDot ok={Boolean(live.scale?.connected)} />Scale {live.scale?.port || ""}</span>
           </div>
 
@@ -466,7 +569,7 @@ export default function App() {
                   <strong>{typeof weight === "number" ? `${weight.toFixed(2)} g` : "Waiting..."}</strong>
                   <time dateTime={currentTime.toISOString()}>{liveDate} · {liveTime}</time>
                 </div>
-                <button className="primary captureButton" onClick={capture} disabled={busy || !live.camera?.connected || !live.scale?.connected || !rois.processing || !rois.apriltag}>
+                <button className="primary captureButton" onClick={capture} disabled={busy || !cameraReady || !live.scale?.connected || !rois.processing || !rois.apriltag}>
                   {busy ? "Please wait..." : "Capture jewellery"}
                 </button>
                 {(!rois.processing || !rois.apriltag) && <p className="hint">Set both camera areas before the first capture.</p>}
@@ -507,7 +610,7 @@ export default function App() {
                       <button
                         className="secondary"
                         onClick={recapture}
-                        disabled={busy || !live.camera?.connected || !live.scale?.connected || !rois.processing || !rois.apriltag}
+                        disabled={busy || !cameraReady || !live.scale?.connected || !rois.processing || !rois.apriltag}
                       >
                         {busy ? "Please wait..." : "Recapture image"}
                       </button>
@@ -608,7 +711,7 @@ export default function App() {
               <>
                 <span className="eyebrow">Tare weight capture</span>
                 <h2>Capture the packed jewel</h2>
-                <p>This saves the packet image with the current scale weight. No jewellery analysis is performed.</p>
+                <p>This saves the packet image with the current scale weight, printed packet number, and barcode check.</p>
                 <div className="tareModeButtons" role="group" aria-label="Tare capture mode">
                   <button className={tareMode === "pledge" ? "selected" : ""} onClick={() => setTareMode("pledge")}>Pledge tare</button>
                   <button className={tareMode === "release" ? "selected" : ""} onClick={() => setTareMode("release")}>Release tare</button>
@@ -618,13 +721,21 @@ export default function App() {
                   <strong>{typeof weight === "number" ? `${weight.toFixed(2)} g` : "Waiting..."}</strong>
                   <time dateTime={currentTime.toISOString()}>{liveDate} · {liveTime}</time>
                 </div>
-                <button className="primary captureButton" onClick={captureTare} disabled={busy || !live.camera?.connected || !live.scale?.connected}>
+                <button className="primary captureButton" onClick={captureTare} disabled={busy || !cameraReady || !live.scale?.connected}>
                   {busy ? "Please wait..." : `Capture ${tareMode} tare`}
                 </button>
                 {tareCapture && (
                   <div className="tareResult">
                     <span className="eyebrow successText">Saved {tareMode} tare</span>
                     <ResultImage src={tareCapture.media?.evidence} alt={`${tareMode} tare packet`} />
+                    <div className="tarePacketDetails">
+                      <strong>Packet number: {tareCapture.result?.packet?.packet_number || "Not read"}</strong>
+                      <span>Barcode: {tareCapture.result?.packet?.barcode || "Not read"}</span>
+                      <span>{tareCapture.result?.packet?.status === "MATCH" ? "Barcode matched" : tareCapture.result?.packet?.message || "Barcode not verified"}</span>
+                    </div>
+                    {tareCapture.media?.result_image && (
+                      <a className="primary linkButton" href={`${tareCapture.media.result_image}?download=true`}>Download image</a>
+                    )}
                     <div className="tareMeta">
                       <strong>{Number(tareCapture.weight_g).toFixed(2)} g</strong>
                       <time dateTime={tareCapture.captured_at}>

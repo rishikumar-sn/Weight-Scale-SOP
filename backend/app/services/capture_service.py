@@ -17,6 +17,8 @@ from ..analysis.vision import (
     roi_to_pixels,
     translate_roi_to_crop,
 )
+from .packet_scan_service import PacketScanService
+from .report_service import ReportService
 
 
 class CaptureService:
@@ -26,6 +28,8 @@ class CaptureService:
         self.settings_store = settings_store
         self.repository = repository
         self.artifact_finalizer = artifact_finalizer
+        self.packet_scanner = PacketScanService()
+        self.reports = ReportService()
 
     @staticmethod
     def _save(path: Path, image: np.ndarray) -> str:
@@ -180,7 +184,7 @@ class CaptureService:
         return state
 
     def capture_tare(self, mode: str) -> dict[str, Any]:
-        """Save a packet tare image and its live scale reading without analysis."""
+        """Save a packet tare image with its scale reading and verified packet ID."""
         if mode not in {"pledge", "release"}:
             raise ValueError("Tare mode must be pledge or release")
 
@@ -199,17 +203,11 @@ class CaptureService:
             )
 
         now = datetime.now().astimezone()
+        packet = self.packet_scanner.scan(frame)
         capture_id = f"tare_{mode}_{now.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
         source_dir = self.repository.session_dir(capture_id) / "capture"
-        evidence = self._evidence_image(
-            frame,
-            float(weight),
-            now,
-            caption=f"{mode.title()} Tare Weight",
-        )
         paths = {
             "original": self._save(source_dir / "original.png", frame),
-            "evidence": self._save(source_dir / "evidence.jpg", evidence),
         }
         state: dict[str, Any] = {
             "id": capture_id,
@@ -224,27 +222,18 @@ class CaptureService:
             "paths": paths,
             "classification": {},
             "route": {},
-            "result": {"tare_mode": mode},
+            "result": {"tare_mode": mode, "packet": packet},
             "job": {
                 "status": "complete",
                 "stage": "Complete",
-                "message": f"{mode.title()} tare weight captured",
+                "message": f"{mode.title()} tare captured. {packet['message']}",
                 "percent": 100,
                 "seconds_remaining": 0,
                 "error": None,
             },
         }
-        if self.artifact_finalizer is not None:
-            try:
-                state["storage"] = self.artifact_finalizer.finalize(state)
-            except Exception as exc:  # Storage optimization must not lose a tare result.
-                state["storage"] = {
-                    "status": "partial",
-                    "lossless": True,
-                    "processed_after_results": True,
-                    "processed_after_analysis": False,
-                    "errors": [{"path": str(source_dir), "message": str(exc)}],
-                    "presentation_artifacts": "compressed_on_demand",
-                }
+        evidence_path = source_dir / "evidence.png"
+        self.reports.generate_tare_result_image(state).save(evidence_path)
+        state["paths"]["evidence"] = str(evidence_path)
         self.repository.save(state)
         return state

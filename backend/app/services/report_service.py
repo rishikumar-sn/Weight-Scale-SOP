@@ -44,6 +44,74 @@ class ReportService:
             size -= 2
         return ReportService._result_font(size, bold)
 
+    def generate_tare_result_image(self, state: dict[str, Any]) -> PillowImage.Image:
+        """Place packet verification beside the untouched tare photograph."""
+        original_path = Path(state["paths"]["original"])
+        with PillowImage.open(original_path) as source:
+            capture = ImageOps.exif_transpose(source).convert("RGB")
+        image_width, image_height = capture.size
+        panel_width = max(480, min(780, round(image_width * 0.54)))
+        output = PillowImage.new("RGB", (image_width + panel_width, image_height), "#F3F6F9")
+        output.paste(capture, (0, 0))
+        draw = ImageDraw.Draw(output)
+        scale = min(panel_width / 580, image_height / 1920)
+
+        def px(value: float) -> int:
+            return max(1, round(value * scale))
+
+        packet = (state.get("result") or {}).get("packet") or {}
+        for detection in packet.get("detections") or []:
+            points = detection.get("points") or []
+            if len(points) == 4:
+                polygon = [tuple(point) for point in points]
+                draw.line(polygon + polygon[:1], fill="#51C8A6", width=px(5))
+
+        left = image_width
+        x = left + px(42)
+        right = image_width + panel_width - px(42)
+        width = right - x
+        navy, gold, muted, ink = "#14233B", "#C79A43", "#617087", "#182235"
+        draw.rectangle((left, 0, image_width + panel_width, px(240)), fill=navy)
+        draw.rectangle((left, px(232), image_width + panel_width, px(240)), fill=gold)
+        mode = str(state.get("tare_mode") or "").upper()
+        draw.text((x, px(48)), f"{mode} TARE CAPTURE", fill="#C9D4E3", font=self._result_font(px(26), True))
+        draw.text((x, px(102)), "Packet Summary", fill="white", font=self._fit_text(draw, "Packet Summary", width, px(50), True))
+
+        def card(top: int, height: int, label: str, value: str, color: str = ink) -> int:
+            draw.rounded_rectangle((x, top, right, top + height), radius=px(18), fill="white", outline="#DCE3EA", width=px(2))
+            draw.rectangle((x, top + px(12), x + px(8), top + height - px(12)), fill=gold)
+            draw.text((x + px(27), top + px(24)), label, fill=muted, font=self._result_font(px(23), True))
+            draw.text((x + px(27), top + px(72)), value, fill=color,
+                      font=self._fit_text(draw, value, width - px(55), px(48), True))
+            return top + height + px(22)
+
+        top = px(290)
+        number = str(packet.get("packet_number") or "Unavailable")
+        top = card(top, px(164), "PACKET NUMBER (OCR)", number)
+        status = str(packet.get("status") or "NOT_FOUND")
+        status_text = {
+            "MATCH": "BARCODE MATCHED",
+            "MISMATCH": "BARCODE MISMATCH",
+            "BARCODE_ONLY": "BARCODE ONLY",
+            "OCR_ONLY": "BARCODE NOT READ",
+            "NOT_FOUND": "PACKET NOT READ",
+        }.get(status, "NOT VERIFIED")
+        status_color = "#167D5A" if status == "MATCH" else "#B24C37"
+        top = card(top, px(164), "BARCODE CHECK", status_text, status_color)
+        barcode = str(packet.get("barcode") or "Unavailable")
+        top = card(top, px(164), "BARCODE DIGITS", barcode)
+        weight = state.get("weight_g")
+        weight_text = f"{float(weight):.2f} g" if weight is not None else "Unavailable"
+        top = card(top, px(164), "TARE WEIGHT", weight_text)
+        try:
+            captured = datetime.fromisoformat(str(state.get("captured_at")))
+            date_text, time_text = captured.strftime("%d-%m-%Y"), captured.strftime("%I:%M:%S %p")
+        except ValueError:
+            date_text, time_text = "Unavailable", "Unavailable"
+        top = card(top, px(164), "CAPTURE DATE", date_text)
+        card(top, px(164), "CAPTURE TIME", time_text)
+        return output
+
     def generate_result_image(self, state: dict[str, Any]) -> io.BytesIO:
         """Compose the untouched capture and its summary into one PNG image."""
         original_path = Path(str((state.get("paths") or {}).get("original") or ""))

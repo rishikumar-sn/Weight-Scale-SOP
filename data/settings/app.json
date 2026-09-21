@@ -6,6 +6,7 @@
     "fps": 30,
     "rotation": 270,
     "preview_quality": 78,
+    "preview_max_dimension": 960,
     "power_line_hz": 50,
     "shutter_denominator": 100,
     "driver_managed_exposure": true,
@@ -27,10 +28,10 @@
       "height": 0.4339728000026131
     },
     "apriltag": {
-      "x": 0.07894263572314161,
-      "y": 0.17657751733276364,
-      "width": 0.07393591137396532,
-      "height": 0.03073969430936596
+      "x": 0.09014679459710664,
+      "y": 0.18435534527537467,
+      "width": 0.06429070881797697,
+      "height": 0.037735871690382866
     }
   },
   "apriltag": {

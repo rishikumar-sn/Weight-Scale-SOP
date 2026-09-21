@@ -13,6 +13,7 @@ Classification/         SigLIP ONNX model, prompts, and correction gallery
 Dimension/              Bangle and ring measurement
 frontend/               React/Vite operator interface
 models/detection/        Bead-detection ONNX model
+models/packet/           Packet barcode label ONNX model
 StoneDetection/         Stone detection and weight estimation
 reference/hardware/      Original camera, scale, and shutter scripts
 scripts/                 Setup, launch, and regression helpers
@@ -50,6 +51,32 @@ analysis is running. `Ctrl+C` in the backend terminal uses the same cleanup path
 
 Only one backend process may run because it owns the camera and COM port. On the
 first run, open **Set camera areas** and save both the jewellery and marker areas.
+
+The live feed is processed in the backend. Its temporal anti-flicker filter uses
+the configured 90-frame rolling average. Preview JPEG encoding runs on a separate
+thread and discards older pending frames. The camera header shows the preview
+frame rate; `/api/health` reports it as `camera.stream_fps` alongside the camera
+processing rate (`camera.processed_fps`). The live JPEG preview is limited to a
+960 pixel longest side by default, while saved captures retain the camera's full
+resolution.
+
+## Packet tare captures
+
+The **Tare weight** tab supports pledge and release captures. Each capture uses the
+camera frame and current scale reading, detects the packet label, reads the printed
+7 or 8 digit packet number with PaddleOCR, reads its Code128 barcode with ZXing,
+and compares the two. The saved result image places the packet number, barcode
+status, tare weight, date, and time beside the photograph. A missing read or
+mismatch is shown explicitly; it is never labeled as matched.
+
+The backend loads the packet detector and OCR at startup. PaddleOCR may download
+recognition models on the first startup, so allow network access then. Captures
+reuse those loaded models. The original frame is retained alongside the result
+image in the capture session.
+
+Packet OCR is limited to four CPU threads by default so a tare scan leaves
+capacity for the live camera. Set `PADDLE_PDX_CPU_NUM_THREADS` before starting
+the backend to choose another limit.
 
 ## Frontend and backend separately for development
 

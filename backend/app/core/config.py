@@ -24,6 +24,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "fps": 30,
         "rotation": 270,
         "preview_quality": 78,
+        "preview_max_dimension": 960,
         "power_line_hz": 50,
         "shutter_denominator": 100,
         "driver_managed_exposure": True,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,7 @@ reports = ReportService()
 artifact_compression = ArtifactCompressionService(repository)
 captures = CaptureService(camera, scale, settings_store, repository, artifact_compression)
 analysis = AnalysisService(repository, artifact_compression)
+logger = logging.getLogger(__name__)
 
 
 def _state(capture_id: str) -> dict[str, Any]:
@@ -98,6 +100,11 @@ def _public_capture(state: dict[str, Any]) -> dict[str, Any]:
 async def lifespan(_: FastAPI):
     try:
         analysis.preload_models()
+        try:
+            captures.packet_scanner.preload()
+            logger.info("Packet detector and OCR are ready")
+        except Exception:
+            logger.exception("Packet scanner could not be preloaded; tare capture will retry")
         camera.start()
         scale.start()
         yield
@@ -160,6 +167,11 @@ def live_state():
 @app.get("/api/video")
 def video():
     return StreamingResponse(camera.mjpeg(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+
+@app.post("/api/camera/reconnect", status_code=202)
+def reconnect_camera():
+    return {"ok": True, "camera": camera.request_reconnect()}
 
 
 @app.websocket("/ws/live")
@@ -284,6 +296,18 @@ def result_image(capture_id: str, download: bool = False):
     if state.get("status") != "complete":
         raise HTTPException(status_code=409, detail="Results are not ready")
     disposition = "attachment" if download else "inline"
+    if state.get("capture_type") == "tare":
+        evidence = Path(str((state.get("paths") or {}).get("evidence") or ""))
+        if not evidence.is_file():
+            raise HTTPException(status_code=404, detail="Tare result image is unavailable")
+        return FileResponse(
+            evidence,
+            media_type="image/png",
+            headers={
+                "Content-Disposition": f'{disposition}; filename="tare_{capture_id}.png"',
+                "Cache-Control": "no-store, max-age=0",
+            },
+        )
     return StreamingResponse(
         reports.generate_result_image(state),
         media_type="image/png",
