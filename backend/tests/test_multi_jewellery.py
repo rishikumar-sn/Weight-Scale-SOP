@@ -4,9 +4,13 @@ from copy import deepcopy
 
 import cv2
 import numpy as np
+import pytest
 
 from backend.app.analysis.vision import separate_jewellery_items
-from backend.app.services.analysis_service import AnalysisService
+from backend.app.services.analysis_service import (
+    AnalysisService,
+    _ring_bangle_dimension_fallback,
+)
 
 
 def test_separate_jewellery_items_returns_stable_pair_and_isolated_crops() -> None:
@@ -43,6 +47,141 @@ def test_touching_objects_are_not_split_unreliably() -> None:
     items = separate_jewellery_items(image, mask, min_area_px=100, min_area_ratio=0)
 
     assert len(items) == 1
+
+
+def test_enclosed_black_stone_interior_is_preserved() -> None:
+    image = np.full((180, 240, 3), 205, dtype=np.uint8)
+    mask = np.zeros((180, 240), dtype=np.uint8)
+    cv2.rectangle(mask, (30, 50), (120, 130), 1, -1)
+    cv2.circle(mask, (130, 90), 14, 1, 6)
+    image[mask > 0] = (35, 145, 205)
+    cv2.circle(image, (130, 90), 11, (18, 18, 18), -1)
+
+    items = separate_jewellery_items(
+        image,
+        mask,
+        min_area_px=100,
+        min_area_ratio=0,
+        padding_px=8,
+    )
+
+    assert len(items) == 1
+    item = items[0]
+    local_x = 130 - item["bbox"]["x"]
+    local_y = 90 - item["bbox"]["y"]
+    assert item["mask"][local_y, local_x] == 1
+    assert np.all(item["crop_bgr"][local_y, local_x] == (18, 18, 18))
+
+
+def test_enclosed_background_opening_remains_removed() -> None:
+    image = np.full((180, 240, 3), 205, dtype=np.uint8)
+    mask = np.zeros((180, 240), dtype=np.uint8)
+    cv2.rectangle(mask, (30, 50), (120, 130), 1, -1)
+    cv2.circle(mask, (130, 90), 14, 1, 6)
+    image[mask > 0] = (35, 145, 205)
+
+    items = separate_jewellery_items(
+        image,
+        mask,
+        min_area_px=100,
+        min_area_ratio=0,
+        padding_px=8,
+    )
+
+    assert len(items) == 1
+    item = items[0]
+    local_x = 130 - item["bbox"]["x"]
+    local_y = 90 - item["bbox"]["y"]
+    assert item["mask"][local_y, local_x] == 0
+    assert np.all(item["crop_bgr"][local_y, local_x] == 255)
+
+
+def test_dimension_fallback_resolves_only_ring_bangle_size_conflicts() -> None:
+    mask = np.zeros((320, 320), dtype=np.uint8)
+    cv2.circle(mask, (160, 160), 130, 1, 8)
+    calibration = {
+        "available": True,
+        "found": True,
+        "mm_per_pixel_x": 0.18,
+        "mm_per_pixel_y": 0.18,
+    }
+
+    small_mask = cv2.resize(mask, (100, 100), interpolation=cv2.INTER_NEAREST)
+    label, small_evidence = _ring_bangle_dimension_fallback(
+        "Bangle", small_mask, calibration
+    )
+    assert label == "Finger Ring"
+    assert small_evidence["applied"] is True
+    assert small_evidence["outer_span_mm"] <= 35.0
+
+    label, large_evidence = _ring_bangle_dimension_fallback(
+        "Finger Ring", mask, calibration
+    )
+    assert label == "Bangle"
+    assert large_evidence["applied"] is True
+    assert large_evidence["outer_span_mm"] >= 40.0
+
+    label, unrelated_evidence = _ring_bangle_dimension_fallback(
+        "Earrings / Nosepin", small_mask, calibration
+    )
+    assert label == "Earrings / Nosepin"
+    assert unrelated_evidence["available"] is False
+
+
+def test_dimension_fallback_keeps_prediction_without_calibration() -> None:
+    mask = np.ones((50, 50), dtype=np.uint8)
+
+    label, evidence = _ring_bangle_dimension_fallback("Bangle", mask, None)
+
+    assert label == "Bangle"
+    assert evidence["applied"] is False
+
+
+def test_raw_semantic_rejection_runs_before_masked_category_prediction(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    working_path = tmp_path / "working.png"
+    mask_path = tmp_path / "mask.png"
+    cv2.imwrite(str(working_path), np.full((80, 80, 3), 255, dtype=np.uint8))
+    cv2.imwrite(str(mask_path), np.full((80, 80), 255, dtype=np.uint8))
+    state = {
+        "id": "foreign-object",
+        "paths": {"working": str(working_path), "mask": str(mask_path)},
+        "settings_snapshot": {"analysis": {"item_separation": {}}},
+    }
+
+    class Repository:
+        def get(self, _capture_id):
+            return deepcopy(state)
+
+        def session_dir(self, capture_id):
+            return tmp_path / capture_id
+
+    class Classifier:
+        def check_non_jewelry(self, _image):
+            return True, "foreign object"
+
+        def classify_image(self, *_args, **_kwargs):
+            raise AssertionError("Masked category prediction must not run")
+
+    separated_item = {
+        "bbox": {"x": 0, "y": 0, "w": 50, "h": 50},
+        "area_px": 1000,
+        "raw_crop_bgr": np.full((50, 50, 3), (0, 0, 255), dtype=np.uint8),
+        "crop_bgr": np.full((50, 50, 3), 255, dtype=np.uint8),
+        "mask": np.ones((50, 50), dtype=np.uint8),
+    }
+    monkeypatch.setattr(
+        "backend.app.services.analysis_service.separate_jewellery_items",
+        lambda *_args, **_kwargs: [separated_item],
+    )
+    service = AnalysisService(Repository())
+    monkeypatch.setattr(service, "_get_classifier", lambda: Classifier())
+
+    with pytest.raises(RuntimeError, match="non-jewellery object"):
+        service.classify("foreign-object")
+    service.shutdown()
 
 
 class _Repository:

@@ -235,6 +235,8 @@ def check_item_type(capture_id: str):
         return _public_capture(analysis.classify(capture_id))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Capture not found") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         print(f"Item type check failed for {capture_id}: {exc}")
         raise HTTPException(

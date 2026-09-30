@@ -53,6 +53,8 @@ BEAD_MIN_VERIFICATION_RATIO = 0.20
 BEAD_RED_FALLBACK_MIN_CANDIDATES = 2
 BEAD_RED_FALLBACK_MIN_COMPONENTS = 8
 BEAD_RED_FALLBACK_MAX_AREA_CV = 0.45
+FINGER_RING_MAX_OUTER_SPAN_MM = 35.0
+BANGLE_MIN_OUTER_SPAN_MM = 40.0
 
 
 def _apriltag_scale_mm_per_pixel(calibration: dict[str, Any] | None) -> float:
@@ -76,6 +78,78 @@ def _apriltag_scale_mm_per_pixel(calibration: dict[str, Any] | None) -> float:
     # the correct single linear scale for preserving that area when the camera
     # has a small X/Y pixel-scale difference.
     return float(math.sqrt(scale_x * scale_y))
+
+
+def _ring_bangle_dimension_fallback(
+    predicted_label: str,
+    item_mask: np.ndarray,
+    calibration: dict[str, Any] | None,
+) -> tuple[str, dict[str, Any]]:
+    """Resolve only ring/bangle conflicts using calibrated physical size.
+
+    A deliberately unused 35--40 mm guard band prevents borderline or noisy
+    measurements from changing the semantic prediction.
+    """
+    label = str(predicted_label).strip()
+    evidence: dict[str, Any] = {
+        "available": False,
+        "applied": False,
+        "input_label": label,
+        "output_label": label,
+    }
+    if label not in {"Finger Ring", "Bangle"}:
+        evidence["reason"] = "not a finger-ring/bangle prediction"
+        return label, evidence
+
+    calibration = calibration or {}
+    if not calibration.get("available") or not calibration.get("found"):
+        evidence["reason"] = "AprilTag calibration unavailable"
+        return label, evidence
+
+    try:
+        scale_x = float(calibration["mm_per_pixel_x"])
+        scale_y = float(calibration["mm_per_pixel_y"])
+    except (KeyError, TypeError, ValueError):
+        evidence["reason"] = "AprilTag calibration scales unavailable"
+        return label, evidence
+    if not np.isfinite([scale_x, scale_y]).all() or scale_x <= 0.0 or scale_y <= 0.0:
+        evidence["reason"] = "AprilTag calibration scales invalid"
+        return label, evidence
+
+    foreground = np.asarray(item_mask) > 0
+    points = cv2.findNonZero(foreground.astype(np.uint8))
+    if points is None:
+        evidence["reason"] = "item mask has no foreground"
+        return label, evidence
+
+    _, _, width_px, height_px = cv2.boundingRect(points)
+    width_mm = float(width_px * scale_x)
+    height_mm = float(height_px * scale_y)
+    outer_span_mm = max(width_mm, height_mm)
+    evidence.update(
+        {
+            "available": True,
+            "width_mm": width_mm,
+            "height_mm": height_mm,
+            "outer_span_mm": outer_span_mm,
+            "finger_ring_max_mm": FINGER_RING_MAX_OUTER_SPAN_MM,
+            "bangle_min_mm": BANGLE_MIN_OUTER_SPAN_MM,
+        }
+    )
+
+    corrected_label = label
+    if label == "Bangle" and outer_span_mm <= FINGER_RING_MAX_OUTER_SPAN_MM:
+        corrected_label = "Finger Ring"
+        evidence["reason"] = "measured span is physically finger-ring sized"
+    elif label == "Finger Ring" and outer_span_mm >= BANGLE_MIN_OUTER_SPAN_MM:
+        corrected_label = "Bangle"
+        evidence["reason"] = "measured span is physically bangle sized"
+    else:
+        evidence["reason"] = "measurement does not justify a ring/bangle override"
+
+    evidence["applied"] = corrected_label != label
+    evidence["output_label"] = corrected_label
+    return corrected_label, evidence
 
 
 def _bead_nms_iou_threshold(
@@ -694,8 +768,37 @@ class AnalysisService:
             if not cv2.imwrite(str(raw_crop_path), separated_item["raw_crop_bgr"]):
                 raise RuntimeError(f"Could not save raw separated jewel {index}")
             cv2.imwrite(str(mask_path), separated_item["mask"] * 255)
+            raw_crop_rgb = cv2.cvtColor(
+                separated_item["raw_crop_bgr"],
+                cv2.COLOR_BGR2RGB,
+            )
+            foreign_object, semantic_reason = classifier.check_non_jewelry(
+                Image.fromarray(raw_crop_rgb)
+            )
+            if foreign_object:
+                raise RuntimeError(
+                    "A non-jewellery object was detected in the jewellery area. "
+                    "Remove phones, boxes, cases, tools, and other foreign objects, "
+                    "then recapture."
+                )
             crop_rgb = cv2.cvtColor(separated_item["crop_bgr"], cv2.COLOR_BGR2RGB)
             prediction = classifier.classify_image(Image.fromarray(crop_rgb), image_path=str(crop_path))
+            if prediction.decision_source in {
+                "obvious_non_gold_color",
+                "strong_non_jewelry",
+            }:
+                raise RuntimeError(
+                    "A non-jewellery object was detected in the jewellery area. "
+                    "Remove phones, boxes, tools, and other foreign objects, then recapture."
+                )
+            predicted_label, dimension_fallback = _ring_bangle_dimension_fallback(
+                prediction.label,
+                separated_item["mask"],
+                state.get("calibration"),
+            )
+            decision_source = prediction.decision_source
+            if dimension_fallback["applied"]:
+                decision_source = "dimension_ring_bangle_fallback"
             classified_items.append({
                 "index": index,
                 "bbox": separated_item["bbox"],
@@ -706,7 +809,14 @@ class AnalysisService:
                     "prepared": str(crop_path),
                     "mask": str(mask_path),
                 },
-                "predicted_label": prediction.label,
+                "predicted_label": predicted_label,
+                "model_label": prediction.model_label,
+                "model_confidence": float(prediction.model_confidence),
+                "decision_source": decision_source,
+                "classifier_label": prediction.label,
+                "classifier_decision_source": prediction.decision_source,
+                "dimension_fallback": dimension_fallback,
+                "semantic_validation_reason": semantic_reason,
                 "confirmed_label": None,
                 "confirmed": False,
                 "confidence": float(prediction.confidence),
@@ -714,6 +824,7 @@ class AnalysisService:
                 "gallery_similarity": float(prediction.gallery_similarity),
                 "gallery_support": int(prediction.gallery_support),
                 "gallery_margin": float(prediction.gallery_margin),
+                "gold_verification_reason": prediction.gold_verification_reason,
                 "scores": [
                     {
                         "label": score.label,

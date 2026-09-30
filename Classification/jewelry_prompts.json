@@ -41,7 +41,10 @@
       "a studio product photo of finger jewelry",
       "a ring sized for a finger on a white background",
       "a circular finger ornament laid flat on a table",
-      "a small jewelry band worn on the finger"
+      "a small jewelry band worn on the finger",
+      "a small C-shaped adjustable finger ring with an open gap and rounded ends",
+      "an ornate finger ring photographed from the side with the band partly hidden",
+      "a V-shaped or chevron finger ring viewed from the decorative front"
     ],
     "negative": [
       "a non-jewelry item",
@@ -152,7 +155,11 @@
         "a solitaire, floral, or stone set ring for the finger",
         "a single jewelry ring with bezel and band",
         "a small closed loop ornament worn on the finger",
-        "a finger ring product photo that is much smaller than a bangle"
+        "a finger ring product photo that is much smaller than a bangle",
+        "a small adjustable open-ended gold finger ring shaped like a C with two rounded tips",
+        "an open finger ring whose narrow circular band has a visible gap",
+        "a decorative cocktail ring seen from the side so its crown hides part of the finger band",
+        "a V-shaped or chevron gold finger ring shown from the ornate front"
       ]
     }
   }

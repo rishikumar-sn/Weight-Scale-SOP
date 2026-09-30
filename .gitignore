@@ -39,3 +39,5 @@ data/ring-validation/
 *.bak
 .DS_Store
 Thumbs.db
+/new_classification
+/chain_datasets

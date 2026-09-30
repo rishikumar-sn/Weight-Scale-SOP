@@ -23,10 +23,13 @@ GALLERY_EXACT_MATCH_THRESHOLD = 0.975
 GALLERY_DISAGREEMENT_MARGIN = 0.01
 GALLERY_TOP_K = 5
 WHITE_THRESHOLD = 245
+EMPTY_BACKGROUND_RATIO = 0.98
+STRONG_NON_JEWELRY_MAX_GOLD_SIMILARITY = 0.035
+STRONG_NON_JEWELRY_MIN_MARGIN = 0.03
+GREEN_DOMINANT_FOREGROUND_RATIO = 0.60
+MIN_COLOR_GATE_FOREGROUND_PIXELS = 100
 FOREGROUND_PADDING_RATIO = 0.12
 SIMILARITY_SCALE = 100.0
-GOLD_TYPE_MIN_SIMILARITY = 0.08
-GOLD_TYPE_REJECTION_MARGIN = 0.03
 PROMPT_EXPANSION_VERSION = "compact-test-bed-v2"
 COMBINED_NECK_LABEL = "Chain / Necklace"
 OTHER_GOLD_LABEL = "Other Gold Jewellery"
@@ -106,6 +109,9 @@ class PredictionResult:
     gallery_margin: float = 0.0
     is_gold_jewelry: bool = True
     gold_verification_reason: str = ""
+    model_label: str = ""
+    model_confidence: float = 0.0
+    decision_source: str = "siglip"
 
 
 def _normalize_vector(vector: np.ndarray) -> np.ndarray:
@@ -330,6 +336,18 @@ class JewelryZeroShotClassifier:
     def embedding_for_path(self, image_path: str | Path) -> np.ndarray:
         with Image.open(image_path) as image:
             return self.embedding_for_image(image)
+
+    def check_non_jewelry(self, image: Image.Image) -> tuple[bool, str]:
+        """Validate semantics from an untouched crop before mask isolation.
+
+        Segmentation can turn solid boxes and cases into hollow outlines that
+        resemble bangles. This check deliberately runs on natural camera pixels.
+        """
+        original = image.convert("RGB")
+        if self._check_background_empty(original):
+            return True, "empty background"
+        embedding = self.embedding_for_image(original)
+        return self._has_strong_non_jewelry_evidence(embedding)
 
     def _resolve_path(self, value: str | Path) -> Path:
         path = Path(value)
@@ -584,10 +602,45 @@ class JewelryZeroShotClassifier:
         return square
 
     def _check_background_empty(self, image: Image.Image) -> bool:
-        """Quick check: if most pixels are near-white, the frame is empty (no object)."""
+        """Reject a nearly blank frame without rejecting thin, sparse jewellery."""
         arr = np.array(image.convert("RGB"))
         white_pixels = np.all(arr > WHITE_THRESHOLD - 10, axis=2).sum()
-        return white_pixels / max(1, arr.shape[0] * arr.shape[1]) > 0.85
+        return bool(
+            white_pixels / max(1, arr.shape[0] * arr.shape[1])
+            > EMPTY_BACKGROUND_RATIO
+        )
+
+    def _check_obvious_non_gold_color(self, image: Image.Image) -> tuple[bool, str]:
+        """Reject a strongly green masked object before shape can dominate SigLIP.
+
+        A rubber band and a ring/bangle have almost the same silhouette.  The
+        production item crop has a pure-white background, so colour evidence
+        from its foreground is a reliable high-precision guard for the green
+        rubber-band failure without making broad assumptions about silver,
+        white-gold, or stone-set jewellery.
+        """
+        pixels = np.asarray(image.convert("RGB"), dtype=np.int16)
+        foreground = np.any(pixels < WHITE_THRESHOLD, axis=2)
+        foreground_pixels = pixels[foreground]
+        count = int(foreground_pixels.shape[0])
+        if count < MIN_COLOR_GATE_FOREGROUND_PIXELS:
+            return False, "insufficient foreground for colour validation"
+
+        red = foreground_pixels[:, 0]
+        green = foreground_pixels[:, 1]
+        blue = foreground_pixels[:, 2]
+        chroma = foreground_pixels.max(axis=1) - foreground_pixels.min(axis=1)
+        green_pixels = (
+            (chroma >= 25)
+            & (green >= red + 12)
+            & (green >= blue + 8)
+        )
+        green_ratio = float(np.mean(green_pixels))
+        rejected = green_ratio >= GREEN_DOMINANT_FOREGROUND_RATIO
+        return (
+            rejected,
+            f"green-dominant non-gold colour (ratio={green_ratio:.3f}, pixels={count})",
+        )
 
     def _check_negative_prompts(self, image_embedding: np.ndarray) -> float:
         """Check if the image matches negative prompts (non-jewelry items)."""
@@ -609,6 +662,27 @@ class JewelryZeroShotClassifier:
             self._group_similarity(image_embedding, "non_gold_metal"),
             self._check_negative_prompts(image_embedding),
         )
+
+    def _has_strong_non_jewelry_evidence(
+        self,
+        image_embedding: np.ndarray,
+    ) -> tuple[bool, str]:
+        """Return only high-precision rejection evidence for foreign objects."""
+        gold_sim, non_gold_sim, negative_sim = self._gold_verification_scores(
+            image_embedding
+        )
+        rejection_sim = max(non_gold_sim, negative_sim)
+        margin = rejection_sim - gold_sim
+        rejected = (
+            gold_sim < STRONG_NON_JEWELRY_MAX_GOLD_SIMILARITY
+            and margin >= STRONG_NON_JEWELRY_MIN_MARGIN
+        )
+        reason = (
+            f"strong non-jewellery evidence (g={gold_sim:.3f}, "
+            f"ng={non_gold_sim:.3f}, neg={negative_sim:.3f}, "
+            f"margin={margin:.3f})"
+        )
+        return rejected, reason
 
     def _verify_gold_embedding(
         self,
@@ -639,25 +713,6 @@ class JewelryZeroShotClassifier:
                 f"(g={gold_sim:.3f}, ng={non_gold_sim:.3f}, neg={negative_sim:.3f})"
             ),
         )
-
-    def _gold_type_has_priority(
-        self,
-        top_type_similarity: float,
-        image_embedding: np.ndarray,
-    ) -> tuple[bool, str]:
-        gold_sim, non_gold_sim, negative_sim = self._gold_verification_scores(
-            image_embedding
-        )
-        rejection_sim = max(non_gold_sim, negative_sim)
-        accepted = (
-            top_type_similarity >= GOLD_TYPE_MIN_SIMILARITY
-            and top_type_similarity + GOLD_TYPE_REJECTION_MARGIN >= rejection_sim
-        )
-        reason = (
-            f"type={top_type_similarity:.3f}, gold={gold_sim:.3f}, "
-            f"non_gold={non_gold_sim:.3f}, negative={negative_sim:.3f}"
-        )
-        return accepted, reason
 
     def verify_gold_jewelry(self, image: Image.Image) -> tuple[bool, float, str]:
         """Check whether an image has stronger gold than rejection evidence."""
@@ -706,76 +761,73 @@ class JewelryZeroShotClassifier:
             for index, label in enumerate(self.labels)
         ]
         scores.sort(key=lambda item: item.confidence, reverse=True)
-        top_type_similarity = scores[0].similarity
-        gallery_result = self.gallery.search(
-            merged_embedding,
-            expected_label=scores[0].label,
-        )
-        gallery_label = gallery_result.label
-        gallery_sim = gallery_result.similarity
-        gallery_match = gallery_label is not None
+        model_score = scores[0]
 
-        # Score gold jewel types before applying the non-gold fallback.
-        # A close manually learned non-gold match remains authoritative.
-        if gallery_match and gallery_label == NOT_GOLD_LABEL:
-            gold_reason = f"gallery match: Not Gold Jewelry (sim={gallery_sim:.3f})"
-            return PredictionResult(
-                label="Not Gold Jewelry",
-                confidence=max(0.99, gallery_sim),
-                scores=scores,
-                image_path=image_path,
-                original_image=original,
-                cropped_image=cropped,
-                gallery_match=True,
-                gallery_similarity=gallery_sim,
-                gallery_support=gallery_result.support,
-                gallery_margin=gallery_result.margin,
-                is_gold_jewelry=False,
-                gold_verification_reason=gold_reason,
-            )
-
+        # 1. Always produce the standalone SigLIP category prediction first.
+        # The broad gold/non-gold prompts are diagnostic only: saved history
+        # shows they reject real thin jewellery too often to be a category gate.
         is_gold, gold_conf, gold_reason = self._verify_gold_embedding(
             original,
             merged_embedding,
         )
-        type_has_priority, type_reason = self._gold_type_has_priority(
-            top_type_similarity,
-            merged_embedding,
+        obvious_non_gold_color, color_reason = self._check_obvious_non_gold_color(
+            original
         )
-        type_has_priority = bool(
-            type_has_priority and not self._check_background_empty(original)
+        strong_non_jewelry, rejection_reason = self._has_strong_non_jewelry_evidence(
+            merged_embedding
         )
-        if not is_gold and not type_has_priority:
-            # A gallery match for a gold class overrides gold verification —
-            # the user manually corrected a similar item before, so trust that.
-            if gallery_match and gallery_label != "Not Gold Jewelry":
-                is_gold = True
-                gold_conf = max(float(gold_conf), gallery_sim)
-                gold_reason = f"gallery override: {gallery_label} (sim={gallery_sim:.3f})"
-            else:
-                return PredictionResult(
-                    label="Not Gold Jewelry",
-                    confidence=float(gold_conf),
-                    scores=scores,
-                    image_path=image_path,
-                    original_image=original,
-                    cropped_image=cropped,
-                    gallery_match=gallery_match,
-                    gallery_similarity=gallery_sim,
-                    gallery_support=gallery_result.support,
-                    gallery_margin=gallery_result.margin,
-                    is_gold_jewelry=False,
-                    gold_verification_reason=gold_reason,
-                )
+        if self._check_background_empty(original):
+            base_label = NOT_GOLD_LABEL
+            base_confidence = float(gold_conf)
+            decision_source = "empty_background"
+        elif obvious_non_gold_color:
+            base_label = NOT_GOLD_LABEL
+            base_confidence = float(max(gold_conf, model_score.confidence))
+            decision_source = "obvious_non_gold_color"
+            gold_reason = color_reason
+        elif strong_non_jewelry:
+            base_label = NOT_GOLD_LABEL
+            base_confidence = float(max(gold_conf, model_score.confidence))
+            decision_source = "strong_non_jewelry"
+            gold_reason = rejection_reason
+        else:
+            base_label = model_score.label
+            base_confidence = model_score.confidence
+            decision_source = "siglip"
+            if not is_gold:
+                gold_reason = f"advisory only; SigLIP category retained; {gold_reason}"
 
-        final_label = gallery_label if gallery_match else scores[0].label
-        # Gallery cosine similarity is useful evidence, but it is not a 99%
-        # probability. Keep the reported confidence conservative.
+        # 3. Apply learned examples after the standalone model decision. This
+        # keeps learning useful for known mistakes without hiding model output.
+        if decision_source in {
+            "empty_background",
+            "obvious_non_gold_color",
+            "strong_non_jewelry",
+        }:
+            gallery_result = GallerySearchResult(None, 0.0)
+        else:
+            gallery_result = self.gallery.search(
+                merged_embedding,
+                expected_label=base_label,
+            )
+        gallery_label = gallery_result.label
+        gallery_sim = gallery_result.similarity
+        gallery_match = gallery_label is not None
+        final_label = gallery_label if gallery_match else base_label
         final_confidence = (
-            max(scores[0].confidence, min(0.98, gallery_sim))
+            max(base_confidence, min(0.98, gallery_sim))
             if gallery_match
-            else scores[0].confidence
+            else base_confidence
         )
+        if gallery_match:
+            gallery_action = (
+                "confirmation" if gallery_label == base_label else "correction"
+            )
+            decision_source = f"gallery_{gallery_action}"
+            gold_reason = (
+                f"learned {gallery_action}: {gallery_label} (sim={gallery_sim:.3f}); "
+                f"base={base_label}; {gold_reason}"
+            )
 
         return PredictionResult(
             label=final_label,
@@ -788,15 +840,11 @@ class JewelryZeroShotClassifier:
             gallery_similarity=gallery_sim,
             gallery_support=gallery_result.support,
             gallery_margin=gallery_result.margin,
-            is_gold_jewelry=True,
-            gold_verification_reason=(
-                gold_reason
-                if is_gold or gallery_match
-                else (
-                    f"gold type priority: {scores[0].label} "
-                    f"(similarity={scores[0].similarity:.3f}; {type_reason})"
-                )
-            ),
+            is_gold_jewelry=final_label != NOT_GOLD_LABEL,
+            gold_verification_reason=gold_reason,
+            model_label=model_score.label,
+            model_confidence=model_score.confidence,
+            decision_source=decision_source,
         )
 
     def _compute_class_probabilities(
@@ -821,8 +869,13 @@ class JewelryZeroShotClassifier:
             group_scores = class_similarities[class_indices] * SIMILARITY_SCALE
             within_group = torch.softmax(torch.from_numpy(group_scores), dim=-1).numpy()
             for class_index, class_probability in zip(class_indices, within_group, strict=False):
-                class_probabilities[class_index] = group_probability * float(
-                    class_probability
+                # A group with two categories must not give each category an
+                # automatic 1/2 disadvantage against a one-category group.
+                # Balance group mass by its class count, then normalize below.
+                class_probabilities[class_index] = (
+                    group_probability
+                    * len(class_indices)
+                    * float(class_probability)
                 )
 
         total = float(class_probabilities.sum())

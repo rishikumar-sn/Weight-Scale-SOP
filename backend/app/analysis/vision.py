@@ -171,6 +171,61 @@ def build_jewellery_mask(image: np.ndarray, erase_mask: np.ndarray | None = None
     return prepared, mask
 
 
+def _restore_enclosed_dark_regions(
+    image: np.ndarray,
+    component_mask: np.ndarray,
+) -> np.ndarray:
+    """Restore dark stone interiors lost by local adaptive thresholding.
+
+    A polished black stone can be nearly uniform in its centre. Adaptive
+    thresholding then retains its reflective rim but treats the centre like
+    background. Only dark holes fully enclosed by the selected jewellery
+    component are restored; ordinary openings retain the sampled background
+    colour and remain empty.
+    """
+    component = (component_mask > 0).astype(np.uint8)
+    component_area = int(cv2.countNonZero(component))
+    if component_area <= 0:
+        return component
+
+    inverse = (component == 0).astype(np.uint8)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(inverse, connectivity=8)
+    if count <= 1:
+        return component
+
+    border_labels = set(
+        np.unique(
+            np.concatenate(
+                (labels[0, :], labels[-1, :], labels[:, 0], labels[:, -1])
+            )
+        ).tolist()
+    )
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    outside_pixels = gray[component == 0]
+    if outside_pixels.size == 0:
+        return component
+    background_luma = float(np.median(outside_pixels))
+    dark_limit = background_luma - 18.0
+    max_hole_area = max(16, int(round(component_area * 0.08)))
+    restored = component.copy()
+
+    for label in range(1, count):
+        if label in border_labels:
+            continue
+        area = int(stats[label, cv2.CC_STAT_AREA])
+        if area < 4 or area > max_hole_area:
+            continue
+        pixels = labels == label
+        values = gray[pixels]
+        if (
+            float(np.median(values)) <= dark_limit
+            and float(np.mean(values <= dark_limit)) >= 0.75
+        ):
+            restored[pixels] = 1
+
+    return restored
+
+
 def separate_jewellery_items(
     image: np.ndarray,
     mask: np.ndarray,
@@ -228,13 +283,14 @@ def separate_jewellery_items(
         y1 = max(0, y - max(0, padding_px))
         x2 = min(width, x + component_width + max(0, padding_px))
         y2 = min(height, y + component_height + max(0, padding_px))
-        local_mask = (labels[y1:y2, x1:x2] == component_index).astype(np.uint8)
-        crop_image = np.full((y2 - y1, x2 - x1, 3), 255, dtype=np.uint8)
+        local_component = (labels[y1:y2, x1:x2] == component_index).astype(np.uint8)
         source = image[y1:y2, x1:x2]
+        local_mask = _restore_enclosed_dark_regions(source, local_component)
+        crop_image = np.full((y2 - y1, x2 - x1, 3), 255, dtype=np.uint8)
         crop_image[local_mask > 0] = source[local_mask > 0]
         items.append({
             "bbox": {"x": x1, "y": y1, "w": x2 - x1, "h": y2 - y1},
-            "area_px": area,
+            "area_px": int(cv2.countNonZero(local_mask)),
             # Keep the untouched camera pixels for models trained on natural
             # backgrounds.  ``crop_bgr`` remains the Otsu-isolated version
             # used by classification and segmentation.
