@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 
-from backend.app.analysis.vision import detect_apriltag
+from backend.app.analysis.vision import apriltag_roi_from_detection, detect_apriltag, roi_to_normalized
 
 
 def test_apriltag_detection_retries_full_frame_when_configured_roi_misses_tag():
@@ -23,3 +23,19 @@ def test_apriltag_detection_retries_full_frame_when_configured_roi_misses_tag():
     assert result["detection_scope"] == "full_frame_fallback"
     assert 0.12 < result["mm_per_pixel_x"] < 0.13
     assert 0.12 < result["mm_per_pixel_y"] < 0.13
+
+
+def test_apriltag_detection_builds_a_padded_clipped_roi():
+    detection = {
+        "corners": [[10.0, 20.0], [50.0, 20.0], [50.0, 60.0], [10.0, 60.0]],
+    }
+
+    roi = apriltag_roi_from_detection((100, 200, 3), detection)
+
+    assert roi == {"x": 0, "y": 6, "w": 65, "h": 69}
+    assert roi_to_normalized(roi, 200, 100) == {
+        "x": 0.0,
+        "y": 0.06,
+        "width": 0.325,
+        "height": 0.69,
+    }

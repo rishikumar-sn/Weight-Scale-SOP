@@ -203,6 +203,14 @@ def save_rois(payload: RoiSettings):
     return settings_store.update({"rois": payload.model_dump()})
 
 
+@app.post("/api/settings/rois/apriltag/refresh")
+def refresh_apriltag_roi():
+    try:
+        return captures.refresh_apriltag_roi()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 @app.post("/api/captures")
 def create_capture():
     try:

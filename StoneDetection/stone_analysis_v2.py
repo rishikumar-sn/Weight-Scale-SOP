@@ -45,6 +45,42 @@ STONE_HIGH_AREA_THRESHOLD_MM2 = 100.0
 STONE_SMALL_JEWELLERY_MAX_AREA_MM2 = 50.0
 
 
+def should_reject_neutral_candidate(
+    color: str,
+    area_px: int,
+    broad_gold_share: float,
+    strict_gold_share: float,
+    source_methods: list[str] | tuple[str, ...] | set[str] | None = None,
+    *,
+    minimum_area_px: int = 20,
+) -> bool:
+    """Return whether a neutral V2 region is too small or likely metal.
+
+    The broad gold range intentionally includes dark, low-saturation gold
+    shadows.  Those HSV values also describe polished black stone faces, so a
+    broad-gold overlap is not reliable evidence against a region that has
+    already classified as black.  Strict gold remains useful for black stones;
+    white/colorless regions continue to use the broad mask because bright gold
+    reflections are their main false-positive mode.
+    """
+    if color not in {"White/Colorless", "Black"}:
+        return False
+    if int(area_px) < int(minimum_area_px):
+        return True
+    if color == "White/Colorless":
+        return float(broad_gold_share) > 0.20
+    if float(strict_gold_share) > 0.30:
+        return True
+    # When broad gold still occupies much of a black-classified region, demand
+    # independent evidence of a coherent dark face. This rejects tiny gold
+    # filigree cavities that color seeds alone can mistake for black stones.
+    sources = set(source_methods or ())
+    return float(broad_gold_share) > 0.30 and not {
+        "structural",
+        "dark_structure",
+    }.issubset(sources)
+
+
 def _binary(mask: np.ndarray, shape: tuple[int, int] | None = None) -> np.ndarray:
     result = np.asarray(mask)
     if result.ndim == 3:

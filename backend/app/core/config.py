@@ -15,6 +15,7 @@ SETTINGS_DIR = DATA_DIR / "settings"
 FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
 SETTINGS_PATH = SETTINGS_DIR / "app.json"
 DATABASE_PATH = DATA_DIR / "app.db"
+TESTBED_MODEL_PATH = PROJECT_ROOT / "models" / "segmentation" / "testbed.onnx"
 
 DEFAULT_SETTINGS: dict[str, Any] = {
     "camera": {

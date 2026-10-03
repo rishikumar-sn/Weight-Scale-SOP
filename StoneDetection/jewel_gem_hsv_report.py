@@ -5145,14 +5145,23 @@ def analyze_jewel_candidate(
                         0.0,
                     )
                 )
+                refined_strict_gold_share = float(
+                    (region.get("refinement_diagnostics") or {}).get(
+                        "strict_gold_overlap",
+                        0.0,
+                    )
+                )
                 region_area_before_color_growth = int(cv2.countNonZero(mask))
                 # Neutral chain highlights and warm metal islands are the main
-                # residual false positives. Genuine neutral stones must have a
-                # usable face area and cannot be mostly part of the gold mask.
-                neutral_gold_limit = 0.20 if color == "White/Colorless" else 0.30
-                if color in {"White/Colorless", "Black"} and (
-                    region_area_before_color_growth < 20
-                    or refined_gold_share > neutral_gold_limit
+                # residual false positives. Broad HSV gold is appropriate for
+                # bright white regions, but its dark-shadow band overlaps real
+                # black stones. Validate black regions against strict gold.
+                if _stone_v2.should_reject_neutral_candidate(
+                    color,
+                    region_area_before_color_growth,
+                    refined_gold_share,
+                    refined_strict_gold_share,
+                    region.get("source_methods"),
                 ):
                     continue
                 if color == "Yellow/Gold" and refined_gold_share > 0.45:

@@ -130,6 +130,34 @@ class StoneAnalysisV2Tests(unittest.TestCase):
         result = v2.classify_stone_instance_color(image, self.seed)
         self.assertEqual(result["color"], "Black")
 
+    def test_black_candidate_uses_strict_not_broad_gold_overlap(self):
+        # Dark warm onyx pixels fall inside the broad shadow-gold range used
+        # by production (the failed captures measured 0.32--0.47 broad overlap)
+        # while having no strict-gold overlap. They must remain valid stones.
+        self.assertFalse(
+            v2.should_reject_neutral_candidate(
+                "Black", 588, 0.47, 0.0, ["structural", "dark_structure"]
+            )
+        )
+        self.assertTrue(
+            v2.should_reject_neutral_candidate(
+                "Black", 588, 0.47, 0.31, ["structural", "dark_structure"]
+            )
+        )
+        self.assertTrue(
+            v2.should_reject_neutral_candidate(
+                "Black", 72, 0.54, 0.0, ["hsv_lab", "non_gold_hsv_residual"]
+            )
+        )
+
+    def test_white_candidate_still_uses_broad_gold_overlap(self):
+        self.assertTrue(
+            v2.should_reject_neutral_candidate("White/Colorless", 130, 0.21, 0.0)
+        )
+        self.assertFalse(
+            v2.should_reject_neutral_candidate("White/Colorless", 130, 0.19, 0.0)
+        )
+
     def test_white_and_faceted_yellow_have_structural_candidates(self):
         for expected_source, body in (
             ("white_colorless_structure", (220, 220, 220)),

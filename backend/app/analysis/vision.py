@@ -95,6 +95,49 @@ def detect_apriltag(
     }
 
 
+def apriltag_roi_from_detection(
+    image_shape: tuple[int, ...],
+    detection: dict[str, Any],
+    *,
+    padding_ratio: float = 0.35,
+    minimum_padding_px: int = 8,
+) -> dict[str, int]:
+    """Build a clipped rectangular ROI around detected tag corners.
+
+    The extra band includes the printed tag's quiet zone and a little platform
+    background, ensuring thresholding cannot retain a dark fringe around it.
+    """
+    height, width = image_shape[:2]
+    points = np.asarray(detection.get("corners"), dtype=np.float32).reshape(-1, 2)
+    if len(points) != 4 or not np.isfinite(points).all():
+        raise ValueError("AprilTag detection does not contain four valid corners")
+
+    tag_width = max(
+        float(np.linalg.norm(points[1] - points[0])),
+        float(np.linalg.norm(points[2] - points[3])),
+    )
+    tag_height = max(
+        float(np.linalg.norm(points[2] - points[1])),
+        float(np.linalg.norm(points[3] - points[0])),
+    )
+    pad_x = max(int(minimum_padding_px), int(np.ceil(tag_width * max(0.0, padding_ratio))))
+    pad_y = max(int(minimum_padding_px), int(np.ceil(tag_height * max(0.0, padding_ratio))))
+    x1 = max(0, int(np.floor(float(points[:, 0].min()))) - pad_x)
+    y1 = max(0, int(np.floor(float(points[:, 1].min()))) - pad_y)
+    x2 = min(width, int(np.ceil(float(points[:, 0].max()))) + pad_x + 1)
+    y2 = min(height, int(np.ceil(float(points[:, 1].max()))) + pad_y + 1)
+    return {"x": x1, "y": y1, "w": max(1, x2 - x1), "h": max(1, y2 - y1)}
+
+
+def roi_to_normalized(roi: dict[str, int], width: int, height: int) -> dict[str, float]:
+    return {
+        "x": roi["x"] / width,
+        "y": roi["y"] / height,
+        "width": roi["w"] / width,
+        "height": roi["h"] / height,
+    }
+
+
 def marker_ignore_mask(shape: tuple[int, ...], roi: dict[str, int] | None) -> np.ndarray:
     mask = np.zeros(shape[:2], dtype=np.uint8)
     if roi:

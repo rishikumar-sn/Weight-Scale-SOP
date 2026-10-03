@@ -1,0 +1,31 @@
+{
+  "audit_date": "2026-10-03",
+  "model": "models/segmentation/testbed.onnx",
+  "model_sha256": "9bdfebbd996c750de4fa0d246a8f0fae139b4f904275d644f35bd48b3fc9a5c8",
+  "model_format": "Ultralytics YOLOv8 segmentation ONNX",
+  "input_shape": [1, 3, 640, 640],
+  "capture_sample_count": 40,
+  "sample_selection": "40 most recent non-tare sessions with original, working, and mask images",
+  "first_sample": "20261001_154041_6b538611",
+  "last_sample": "20260928_111630_3da3a633",
+  "detection": {
+    "success_count": 40,
+    "success_rate": 1.0,
+    "mean_confidence": 0.9747369468212128,
+    "minimum_confidence": 0.8132,
+    "maximum_confidence": 0.9819
+  },
+  "roi_output": {
+    "shape": "square",
+    "outside_polygon_fill": "white",
+    "outside_polygon_white_check_passed": true,
+    "polygon_inset_pixels": 2
+  },
+  "downstream_regression": {
+    "comparison": "connected jewellery item count from prior saved mask versus automatically segmented testbed pipeline",
+    "matching_sessions": 40,
+    "different_sessions": 0,
+    "match_rate": 1.0
+  },
+  "visual_evidence": "contact_sheet.jpg"
+}

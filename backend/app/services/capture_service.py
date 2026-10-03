@@ -10,13 +10,17 @@ import cv2
 import numpy as np
 
 from ..analysis.vision import (
+    apriltag_roi_from_detection,
     build_jewellery_mask,
     crop,
     detect_apriltag,
     marker_ignore_mask,
+    roi_to_normalized,
     roi_to_pixels,
     translate_roi_to_crop,
 )
+from ..analysis.testbed_segmentation import TestbedSegmenter
+from ..core.config import TESTBED_MODEL_PATH
 from .packet_scan_service import PacketScanService
 from .report_service import ReportService
 
@@ -30,6 +34,12 @@ class CaptureService:
         self.artifact_finalizer = artifact_finalizer
         self.packet_scanner = PacketScanService()
         self.reports = ReportService()
+        self._testbed_segmenter: TestbedSegmenter | None = None
+
+    def _get_testbed_segmenter(self) -> TestbedSegmenter:
+        if self._testbed_segmenter is None:
+            self._testbed_segmenter = TestbedSegmenter(TESTBED_MODEL_PATH)
+        return self._testbed_segmenter
 
     @staticmethod
     def _save(path: Path, image: np.ndarray) -> str:
@@ -37,6 +47,24 @@ class CaptureService:
         if not cv2.imwrite(str(path), image):
             raise RuntimeError(f"Could not save image: {path}")
         return str(path)
+
+    def refresh_apriltag_roi(self) -> dict[str, Any]:
+        """Detect the configured tag in the current frame and persist its padded ROI."""
+        frame, _ = self.camera.snapshot_frame()
+        settings = self.settings_store.get()
+        tag = settings["apriltag"]
+        detected = detect_apriltag(
+            frame,
+            None,
+            int(tag["id"]),
+            float(tag["width_mm"]),
+            float(tag["height_mm"]),
+        )
+        pixel_roi = apriltag_roi_from_detection(frame.shape, detected)
+        height, width = frame.shape[:2]
+        normalized_roi = roi_to_normalized(pixel_roi, width, height)
+        saved = self.settings_store.update({"rois": {"apriltag": normalized_roi}})
+        return {"settings": saved, "roi": normalized_roi, "detection": detected}
 
     @staticmethod
     def _evidence_image(
@@ -121,12 +149,11 @@ class CaptureService:
         source_dir.mkdir(parents=True, exist_ok=True)
         settings = self.settings_store.get()
         height, width = frame.shape[:2]
-        processing_roi = roi_to_pixels(settings["rois"].get("processing"), width, height)
         apriltag_roi = roi_to_pixels(settings["rois"].get("apriltag"), width, height)
-        processing = crop(frame, processing_roi)
-        working_tag_roi = translate_roi_to_crop(
-            apriltag_roi, processing_roi, processing.shape[1], processing.shape[0]
-        )
+        testbed = self._get_testbed_segmenter().segment(frame)
+        processing = testbed.image
+        processing_roi = testbed.processing_roi
+        effective_apriltag_roi = apriltag_roi
         calibration: dict[str, Any]
         try:
             tag = settings["apriltag"]
@@ -138,12 +165,29 @@ class CaptureService:
                 float(tag["height_mm"]),
             )
             calibration = {"available": True, **detected}
+            effective_apriltag_roi = apriltag_roi_from_detection(frame.shape, detected)
         except Exception as exc:  # noqa: BLE001
             calibration = {"available": False, "message": str(exc)}
+        working_tag_roi = translate_roi_to_crop(
+            effective_apriltag_roi, processing_roi, processing.shape[1], processing.shape[0]
+        )
         ignore_mask = marker_ignore_mask(processing.shape, working_tag_roi)
         clean_processing = processing.copy()
         clean_processing[ignore_mask > 0] = 255
-        prepared, jewellery_mask = build_jewellery_mask(clean_processing, ignore_mask)
+        # Treat everything outside the segmented platform as an erase region.
+        # build_jewellery_mask expands erase regions slightly, which prevents
+        # the polygon-to-white transition from becoming a false jewellery item.
+        analysis_ignore_mask = cv2.bitwise_or(
+            ignore_mask, np.where(testbed.mask > 0, 0, 255).astype(np.uint8)
+        )
+        prepared, jewellery_mask = build_jewellery_mask(
+            clean_processing, analysis_ignore_mask
+        )
+        jewellery_mask = cv2.bitwise_and(
+            jewellery_mask.astype(np.uint8), testbed.mask.astype(np.uint8)
+        )
+        prepared[testbed.mask == 0] = 255
+        prepared[jewellery_mask == 0] = 255
         evidence = self._evidence_image(frame, weight, now)
         paths = {
             "original": self._save(source_dir / "original.png", frame),
@@ -151,6 +195,10 @@ class CaptureService:
             "working": self._save(source_dir / "working.png", clean_processing),
             "prepared": self._save(source_dir / "prepared.png", prepared),
             "mask": self._save(source_dir / "mask.png", jewellery_mask * 255),
+            "testbed_mask": self._save(source_dir / "testbed_mask.png", testbed.mask * 255),
+            "testbed_source_mask": self._save(
+                source_dir / "testbed_source_mask.png", testbed.source_mask * 255
+            ),
         }
         state: dict[str, Any] = {
             "id": capture_id,
@@ -163,8 +211,15 @@ class CaptureService:
             "settings_snapshot": settings,
             "rois": {
                 "processing": processing_roi,
-                "apriltag": apriltag_roi,
+                "testbed_source": testbed.source_roi,
+                "apriltag": effective_apriltag_roi,
+                "configured_apriltag": apriltag_roi,
                 "working_apriltag": working_tag_roi,
+            },
+            "testbed": {
+                "model": str(TESTBED_MODEL_PATH),
+                "confidence": testbed.confidence,
+                "masking": "polygon_with_white_square_padding",
             },
             "calibration": calibration,
             "paths": paths,

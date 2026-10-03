@@ -1,7 +1,6 @@
-import { PointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Roi = { x: number; y: number; width: number; height: number };
-type RoiMode = "processing" | "apriltag";
 type CaptureTab = "jewellery" | "tare";
 type TareMode = "pledge" | "release";
 type CaptureState = Record<string, any>;
@@ -68,7 +67,6 @@ export default function App() {
   const [message, setMessage] = useState("Place the jewellery and check the weight.");
   const [error, setError] = useState("");
   const [setupOpen, setSetupOpen] = useState(false);
-  const [roiMode, setRoiMode] = useState<RoiMode>("processing");
   const [rois, setRois] = useState<{ processing: Roi | null; apriltag: Roi | null }>({
     processing: null,
     apriltag: null,
@@ -80,14 +78,14 @@ export default function App() {
   const [currentTime, setCurrentTime] = useState(() => new Date());
   const [videoSrc, setVideoSrc] = useState("/api/video");
   const [cameraReconnecting, setCameraReconnecting] = useState(false);
+  const [markerRefreshing, setMarkerRefreshing] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const cameraAreaRef = useRef<HTMLDivElement>(null);
   const cameraImageRef = useRef<HTMLImageElement>(null);
   const shutdownRequestedRef = useRef(false);
   const videoRetryRef = useRef<number | null>(null);
   const cameraWasConnectedRef = useRef(false);
-  const dragStart = useRef<{ x: number; y: number } | null>(null);
-  const draft = useRef<Roi | null>(null);
+  const markerRefreshAttemptedRef = useRef(false);
 
   useEffect(() => {
     const timer = window.setInterval(() => setCurrentTime(new Date()), 1000);
@@ -141,6 +139,33 @@ export default function App() {
       setRois(data.settings.rois || { processing: null, apriltag: null });
     }).catch((reason) => setError(reason.message));
   }, []);
+
+  async function refreshMarkerRoi(automatic = false) {
+    if (markerRefreshing || shutdownRequestedRef.current) return;
+    setMarkerRefreshing(true);
+    if (!automatic) {
+      setError("");
+      setMessage("Detecting the AprilTag and refreshing its area...");
+    }
+    try {
+      const data = await requestJson("/api/settings/rois/apriltag/refresh", { method: "POST" });
+      setSettings(data.settings);
+      setRois((current) => ({ ...current, apriltag: data.roi }));
+      setError("");
+      setMessage(automatic ? "Marker area detected automatically." : "Marker area refreshed.");
+    } catch (reason: any) {
+      if (!automatic || !rois.apriltag) setError(reason.message);
+      if (!automatic) setMessage("Could not refresh the marker area.");
+    } finally {
+      setMarkerRefreshing(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!settings || !live.camera?.connected || markerRefreshAttemptedRef.current) return;
+    markerRefreshAttemptedRef.current = true;
+    void refreshMarkerRoi(true);
+  }, [settings, live.camera?.connected]);
 
   useEffect(() => {
     let disposed = false;
@@ -233,7 +258,7 @@ export default function App() {
     if (!context) return;
     context.scale(dpr, dpr);
     context.clearRect(0, 0, rect.width, rect.height);
-    const render = (roi: Roi | null, color: string, label: string) => {
+    const render = (roi: Roi | null, color: string) => {
       if (!roi) return;
       const x = video.left + roi.x * video.width;
       const y = video.top + roi.y * video.height;
@@ -242,17 +267,9 @@ export default function App() {
       context.strokeStyle = color;
       context.lineWidth = 1;
       context.strokeRect(x, y, width, height);
-      context.fillStyle = color;
-      context.font = "600 13px Segoe UI, Arial, sans-serif";
-      const labelY = Math.max(video.top, y - 24);
-      context.fillRect(x, labelY, context.measureText(label).width + 18, 24);
-      context.fillStyle = "white";
-      context.fillText(label, x + 9, labelY + 17);
     };
-    render(rois.processing, "#e6bd70", "Jewellery area");
-    render(rois.apriltag, "#6bc9aa", "Marker");
-    if (draft.current) render(draft.current, roiMode === "processing" ? "#e6bd70" : "#6bc9aa", "New area");
-  }, [roiMode, rois, videoContentRect]);
+    render(rois.apriltag, "#6bc9aa");
+  }, [rois, videoContentRect]);
 
   useEffect(() => {
     drawRois();
@@ -264,68 +281,6 @@ export default function App() {
       window.removeEventListener("orientationchange", drawRois);
     };
   }, [drawRois, setupOpen]);
-
-  function pointFromEvent(event: PointerEvent<HTMLCanvasElement>) {
-    const video = videoContentRect();
-    if (!video) return null;
-    const localX = event.clientX - video.bounds.left;
-    const localY = event.clientY - video.bounds.top;
-    const inside = localX >= video.left && localX <= video.left + video.width
-      && localY >= video.top && localY <= video.top + video.height;
-    return {
-      x: Math.max(0, Math.min(1, (localX - video.left) / video.width)),
-      y: Math.max(0, Math.min(1, (localY - video.top) / video.height)),
-      inside,
-    };
-  }
-
-  function pointerDown(event: PointerEvent<HTMLCanvasElement>) {
-    if (!setupOpen) return;
-    const point = pointFromEvent(event);
-    if (!point?.inside) return;
-    event.currentTarget.setPointerCapture(event.pointerId);
-    dragStart.current = { x: point.x, y: point.y };
-  }
-
-  function pointerMove(event: PointerEvent<HTMLCanvasElement>) {
-    if (!dragStart.current) return;
-    const end = pointFromEvent(event);
-    if (!end) return;
-    draft.current = {
-      x: Math.min(dragStart.current.x, end.x),
-      y: Math.min(dragStart.current.y, end.y),
-      width: Math.abs(end.x - dragStart.current.x),
-      height: Math.abs(end.y - dragStart.current.y),
-    };
-    drawRois();
-  }
-
-  function pointerUp() {
-    const completed = draft.current;
-    if (completed && completed.width > 0.01 && completed.height > 0.01) {
-      setRois((current) => ({ ...current, [roiMode]: completed }));
-    }
-    draft.current = null;
-    dragStart.current = null;
-  }
-
-  async function saveRois() {
-    setBusy(true);
-    setError("");
-    try {
-      const saved = await requestJson("/api/settings/rois", {
-        method: "PUT",
-        body: JSON.stringify(rois),
-      });
-      setSettings(saved);
-      setSetupOpen(false);
-      setMessage("Camera areas saved.");
-    } catch (reason: any) {
-      setError(reason.message);
-    } finally {
-      setBusy(false);
-    }
-  }
 
   async function shutdownBackend() {
     if (!window.confirm("Shut down the backend safely? The camera and scale will be disconnected.")) return;
@@ -481,7 +436,7 @@ export default function App() {
                 {cameraReconnecting ? "Reconnecting..." : "Reconnect camera"}
               </button>
               <button className="textButton" onClick={() => setSetupOpen((value) => !value)}>
-                {setupOpen ? "Close setup" : "Set camera areas"}
+                {setupOpen ? "Close setup" : "Camera setup"}
               </button>
             </div>
           </div>
@@ -501,11 +456,7 @@ export default function App() {
             />
             <canvas
               ref={canvasRef}
-              className={setupOpen ? "roiCanvas active" : "roiCanvas"}
-              onPointerDown={pointerDown}
-              onPointerMove={pointerMove}
-              onPointerUp={pointerUp}
-              onPointerCancel={pointerUp}
+              className="roiCanvas"
             />
             <div className="liveWeightOverlay" aria-label="Live scale weight">
               <span>Live weight</span>
@@ -524,14 +475,12 @@ export default function App() {
           {setupOpen && (
             <div className="roiTools">
               <div>
-                <strong>Camera areas</strong>
-                <p>Choose an area, then drag a box on the camera view.</p>
+                <strong>Automatic testbed area</strong>
+                <p>The segmentation model finds the testbed at capture time. Only the marker area needs refreshing.</p>
               </div>
-              <div className="segmentedButtons" role="group" aria-label="Camera area to select">
-                <button type="button" aria-pressed={roiMode === "processing"} className={roiMode === "processing" ? "selected" : ""} onClick={() => setRoiMode("processing")}>Jewellery area</button>
-                <button type="button" aria-pressed={roiMode === "apriltag"} className={roiMode === "apriltag" ? "selected" : ""} onClick={() => setRoiMode("apriltag")}>Marker area</button>
-              </div>
-              <button className="primary small" onClick={saveRois} disabled={busy || !rois.processing || !rois.apriltag}>Save areas</button>
+              <button className="textButton" onClick={() => refreshMarkerRoi(false)} disabled={!cameraReady || markerRefreshing}>
+                {markerRefreshing ? "Detecting marker..." : "Refresh marker area"}
+              </button>
             </div>
           )}
         </section>
@@ -563,16 +512,16 @@ export default function App() {
               <div className="captureView">
                 <span className="eyebrow">Ready to capture</span>
                 <h2>Place one or more jewels</h2>
-                <p>Keep every jewel inside the saved area, leave a visible gap between them, and keep the marker clearly visible.</p>
+                <p>Keep every jewel on the testbed, leave a visible gap between them, and keep the marker clearly visible.</p>
                 <div className="weightCard">
                   <span>Current weight</span>
                   <strong>{typeof weight === "number" ? `${weight.toFixed(2)} g` : "Waiting..."}</strong>
                   <time dateTime={currentTime.toISOString()}>{liveDate} · {liveTime}</time>
                 </div>
-                <button className="primary captureButton" onClick={capture} disabled={busy || !cameraReady || !live.scale?.connected || !rois.processing || !rois.apriltag}>
+                <button className="primary captureButton" onClick={capture} disabled={busy || !cameraReady || !live.scale?.connected || !rois.apriltag}>
                   {busy ? "Please wait..." : "Capture jewellery"}
                 </button>
-                {(!rois.processing || !rois.apriltag) && <p className="hint">Set both camera areas before the first capture.</p>}
+                {!rois.apriltag && <p className="hint">Keep the AprilTag visible so its area can be detected automatically.</p>}
               </div>
             )}
 
@@ -610,7 +559,7 @@ export default function App() {
                       <button
                         className="secondary"
                         onClick={recapture}
-                        disabled={busy || !cameraReady || !live.scale?.connected || !rois.processing || !rois.apriltag}
+                        disabled={busy || !cameraReady || !live.scale?.connected || !rois.apriltag}
                       >
                         {busy ? "Please wait..." : "Recapture image"}
                       </button>

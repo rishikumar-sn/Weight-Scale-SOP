@@ -1,0 +1,402 @@
+{
+  "audited_item_count": 9,
+  "error_count": 0,
+  "items_with_added_black": 1,
+  "total_added_black_instances": 6,
+  "items_with_non_black_changes": 0,
+  "results": [
+    {
+      "session": "20260928_110650_d04ea289",
+      "item": "item_01",
+      "stored_instance_count": 0,
+      "current_instance_count": 0,
+      "stored_colors": {},
+      "current_colors": {},
+      "current_black_regions": [],
+      "black_instance_delta": 0,
+      "non_black_changed": {}
+    },
+    {
+      "session": "20260928_110650_d04ea289",
+      "item": "item_02",
+      "stored_instance_count": 0,
+      "current_instance_count": 0,
+      "stored_colors": {},
+      "current_colors": {},
+      "current_black_regions": [],
+      "black_instance_delta": 0,
+      "non_black_changed": {}
+    },
+    {
+      "session": "20260928_111630_3da3a633",
+      "item": "item_01",
+      "stored_instance_count": 0,
+      "current_instance_count": 0,
+      "stored_colors": {},
+      "current_colors": {},
+      "current_black_regions": [],
+      "black_instance_delta": 0,
+      "non_black_changed": {}
+    },
+    {
+      "session": "20260929_151604_ee7202f3",
+      "item": "item_01",
+      "stored_instance_count": 2,
+      "current_instance_count": 2,
+      "stored_colors": {
+        "Red": 1,
+        "Yellow/Gold": 1
+      },
+      "current_colors": {
+        "Red": 1,
+        "Yellow/Gold": 1
+      },
+      "current_black_regions": [],
+      "black_instance_delta": 0,
+      "non_black_changed": {}
+    },
+    {
+      "session": "20260929_152630_50db480a",
+      "item": "item_01",
+      "stored_instance_count": 3,
+      "current_instance_count": 3,
+      "stored_colors": {
+        "Multicolor/Color-changing": 2,
+        "White/Colorless": 1
+      },
+      "current_colors": {
+        "Multicolor/Color-changing": 2,
+        "White/Colorless": 1
+      },
+      "current_black_regions": [],
+      "black_instance_delta": 0,
+      "non_black_changed": {}
+    },
+    {
+      "session": "20260929_152759_3fd7ec2c",
+      "item": "item_01",
+      "stored_instance_count": 7,
+      "current_instance_count": 7,
+      "stored_colors": {
+        "Green": 5,
+        "Multicolor/Color-changing": 1,
+        "White/Colorless": 1
+      },
+      "current_colors": {
+        "Green": 5,
+        "Multicolor/Color-changing": 1,
+        "White/Colorless": 1
+      },
+      "current_black_regions": [],
+      "black_instance_delta": 0,
+      "non_black_changed": {}
+    },
+    {
+      "session": "20260929_154815_73d25812",
+      "item": "item_01",
+      "stored_instance_count": 0,
+      "current_instance_count": 0,
+      "stored_colors": {},
+      "current_colors": {},
+      "current_black_regions": [],
+      "black_instance_delta": 0,
+      "non_black_changed": {}
+    },
+    {
+      "session": "20261001_153820_3aea08b2",
+      "item": "item_01",
+      "stored_instance_count": 23,
+      "current_instance_count": 23,
+      "stored_colors": {
+        "Black": 2,
+        "Green": 6,
+        "Multicolor/Color-changing": 12,
+        "Red": 1,
+        "White/Colorless": 2
+      },
+      "current_colors": {
+        "Black": 2,
+        "Green": 6,
+        "Multicolor/Color-changing": 12,
+        "Red": 1,
+        "White/Colorless": 2
+      },
+      "current_black_regions": [
+        {
+          "bbox": [
+            439,
+            625,
+            18,
+            23
+          ],
+          "area_px": 333,
+          "source_methods": [
+            "edge_aware_grabcut",
+            "full_roi",
+            "hsv_lab",
+            "non_gold_hsv_residual"
+          ],
+          "broad_gold_overlap": 0.2673,
+          "strict_gold_overlap": 0.0,
+          "metal_surround_ratio": 0.3614,
+          "compactness": 0.8184
+        },
+        {
+          "bbox": [
+            435,
+            651,
+            13,
+            16
+          ],
+          "area_px": 176,
+          "source_methods": [
+            "adaptive_region_grow",
+            "full_roi",
+            "hsv_lab",
+            "non_gold_hsv_residual"
+          ],
+          "broad_gold_overlap": 0.2443,
+          "strict_gold_overlap": 0.0,
+          "metal_surround_ratio": 0.624,
+          "compactness": 0.8239
+        }
+      ],
+      "black_instance_delta": 0,
+      "non_black_changed": {}
+    },
+    {
+      "session": "20261001_154041_6b538611",
+      "item": "item_01",
+      "stored_instance_count": 6,
+      "current_instance_count": 12,
+      "stored_colors": {
+        "Black": 3,
+        "White/Colorless": 3
+      },
+      "current_colors": {
+        "Black": 9,
+        "White/Colorless": 3
+      },
+      "current_black_regions": [
+        {
+          "bbox": [
+            232,
+            609,
+            27,
+            30
+          ],
+          "area_px": 546,
+          "source_methods": [
+            "adaptive_region_grow",
+            "dark_structure",
+            "edge_enclosure",
+            "full_roi",
+            "hsv_lab",
+            "local_contrast",
+            "non_gold_hsv_residual",
+            "structural",
+            "white_colorless_structure"
+          ],
+          "broad_gold_overlap": 0.1868,
+          "strict_gold_overlap": 0.0,
+          "metal_surround_ratio": 0.5112,
+          "compactness": 0.6019
+        },
+        {
+          "bbox": [
+            612,
+            400,
+            38,
+            34
+          ],
+          "area_px": 732,
+          "source_methods": [
+            "adaptive_region_grow",
+            "dark_structure",
+            "edge_enclosure",
+            "full_roi",
+            "hsv_lab",
+            "local_contrast",
+            "non_gold_hsv_residual",
+            "structural",
+            "white_colorless_structure"
+          ],
+          "broad_gold_overlap": 0.3895,
+          "strict_gold_overlap": 0.0,
+          "metal_surround_ratio": 0.4619,
+          "compactness": 0.4174
+        },
+        {
+          "bbox": [
+            367,
+            674,
+            30,
+            34
+          ],
+          "area_px": 655,
+          "source_methods": [
+            "adaptive_region_grow",
+            "dark_structure",
+            "edge_enclosure",
+            "full_roi",
+            "hsv_lab",
+            "local_contrast",
+            "non_gold_hsv_residual",
+            "structural",
+            "white_colorless_structure"
+          ],
+          "broad_gold_overlap": 0.2977,
+          "strict_gold_overlap": 0.0,
+          "metal_surround_ratio": 0.6443,
+          "compactness": 0.5973
+        },
+        {
+          "bbox": [
+            548,
+            514,
+            35,
+            40
+          ],
+          "area_px": 932,
+          "source_methods": [
+            "adaptive_region_grow",
+            "dark_structure",
+            "edge_enclosure",
+            "full_roi",
+            "hsv_lab",
+            "local_contrast",
+            "non_gold_hsv_residual",
+            "structural",
+            "white_colorless_structure"
+          ],
+          "broad_gold_overlap": 0.4592,
+          "strict_gold_overlap": 0.0,
+          "metal_surround_ratio": 0.3782,
+          "compactness": 0.6319
+        },
+        {
+          "bbox": [
+            326,
+            657,
+            26,
+            32
+          ],
+          "area_px": 566,
+          "source_methods": [
+            "adaptive_region_grow",
+            "dark_structure",
+            "edge_enclosure",
+            "full_roi",
+            "hsv_lab",
+            "local_contrast",
+            "non_gold_hsv_residual",
+            "structural",
+            "white_colorless_structure"
+          ],
+          "broad_gold_overlap": 0.4388,
+          "strict_gold_overlap": 0.0,
+          "metal_surround_ratio": 0.5254,
+          "compactness": 0.6517
+        },
+        {
+          "bbox": [
+            452,
+            637,
+            29,
+            30
+          ],
+          "area_px": 620,
+          "source_methods": [
+            "adaptive_region_grow",
+            "dark_structure",
+            "edge_enclosure",
+            "full_roi",
+            "hsv_lab",
+            "local_contrast",
+            "non_gold_hsv_residual",
+            "non_gold_neutral_residual",
+            "structural",
+            "white_colorless_structure"
+          ],
+          "broad_gold_overlap": 0.3177,
+          "strict_gold_overlap": 0.0,
+          "metal_surround_ratio": 0.8234,
+          "compactness": 0.7835
+        },
+        {
+          "bbox": [
+            500,
+            581,
+            30,
+            35
+          ],
+          "area_px": 693,
+          "source_methods": [
+            "adaptive_region_grow",
+            "dark_structure",
+            "edge_enclosure",
+            "full_roi",
+            "hsv_lab",
+            "local_contrast",
+            "structural",
+            "white_colorless_structure"
+          ],
+          "broad_gold_overlap": 0.4459,
+          "strict_gold_overlap": 0.0,
+          "metal_surround_ratio": 0.673,
+          "compactness": 0.7447
+        },
+        {
+          "bbox": [
+            201,
+            568,
+            30,
+            31
+          ],
+          "area_px": 627,
+          "source_methods": [
+            "adaptive_region_grow",
+            "dark_structure",
+            "edge_enclosure",
+            "full_roi",
+            "hsv_lab",
+            "local_contrast",
+            "non_gold_hsv_residual",
+            "structural",
+            "white_colorless_structure"
+          ],
+          "broad_gold_overlap": 0.4673,
+          "strict_gold_overlap": 0.0,
+          "metal_surround_ratio": 0.5106,
+          "compactness": 0.6457
+        },
+        {
+          "bbox": [
+            570,
+            469,
+            15,
+            19
+          ],
+          "area_px": 183,
+          "source_methods": [
+            "adaptive_region_grow",
+            "dark_structure",
+            "edge_enclosure",
+            "full_roi",
+            "hsv_lab",
+            "local_contrast",
+            "structural",
+            "white_colorless_structure"
+          ],
+          "broad_gold_overlap": 0.0929,
+          "strict_gold_overlap": 0.0,
+          "metal_surround_ratio": 0.7876,
+          "compactness": 0.8612
+        }
+      ],
+      "black_instance_delta": 6,
+      "non_black_changed": {}
+    }
+  ],
+  "errors": []
+}
