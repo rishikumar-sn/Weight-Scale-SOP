@@ -630,7 +630,7 @@ export default function App() {
                           {item.dimensions?.inner_diameter_mm != null && <div><span>Inner diameter</span><strong>{Number(item.dimensions.inner_diameter_mm).toFixed(2)} mm</strong></div>}
                           {item.beads && <div><span>Bead analysis</span><strong>{item.beads.beads_detected ? "Beads detected" : "Beads not detected"}</strong></div>}
                           {item.beads && <div><span>Bead count</span><strong>{item.beads.count ?? item.beads.detections?.length ?? "Unavailable"}</strong></div>}
-                          {result.count > 1 && item.stones?.estimated_weight_g != null && <div><span>Estimated stone weight</span><strong>{item.stones.weight_min_g.toFixed(2)} – {item.stones.weight_max_g.toFixed(2)} g</strong></div>}
+                          {item.beads?.summary && <div className="wide"><span>Bead insights</span><strong>{item.beads.summary}</strong></div>}
                           {item.stones?.stone_area_mm2 != null && <div><span>Detected stone area</span><strong>{Number(item.stones.stone_area_mm2).toFixed(2)} mm²</strong></div>}
                           {item.stones && <div className={`wide riskTag risk${item.stones.risk_level || "NONE"}`}><span>Stone analysis</span><strong>{item.stones.risk_status}</strong></div>}
                         </div>

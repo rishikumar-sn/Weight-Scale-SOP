@@ -27,6 +27,40 @@ def stone_weight_fields(measurements: dict, found: bool) -> dict:
     }
 
 
+def without_stone_weight_estimates(value: Any) -> Any:
+    """Remove gemstone mass/carat estimates while preserving stone analysis."""
+    if isinstance(value, dict):
+        cleaned = {}
+        has_weight_fields = any(
+            "weight" in str(key).lower()
+            or str(key).lower().endswith("_ct")
+            or str(key).lower().endswith("_g")
+            or str(key).lower().startswith("estimated_total_")
+            for key in value
+        )
+        for key, item in value.items():
+            normalized = str(key).lower()
+            if (
+                "weight" in normalized
+                or normalized.endswith("_ct")
+                or normalized.endswith("_g")
+                or normalized.startswith("estimated_total_")
+            ):
+                continue
+            if (
+                has_weight_fields
+                and normalized == "note"
+                and isinstance(item, str)
+                and ("weight" in item.lower() or "carat" in item.lower())
+            ):
+                continue
+            cleaned[key] = without_stone_weight_estimates(item)
+        return cleaned
+    if isinstance(value, list):
+        return [without_stone_weight_estimates(item) for item in value]
+    return value
+
+
 def weight_summary(state: dict) -> dict:
     result = state.get("result") or {}
     items = result.get("items") or []
@@ -35,7 +69,10 @@ def weight_summary(state: dict) -> dict:
     summary = dict(gross_g=gross, stone_g=None, stone_min_g=None, stone_max_g=None,
                    net_g=None, net_min_g=None, net_max_g=None)
     if count != 1 or len(items) > 1:
-        return {**summary, "note": "Net weight is available only for a single-jewel capture."}
+        return {
+            **summary,
+            "note": "Stone-weight and net-weight estimates are available only for a single-jewel capture.",
+        }
     stones = (items[0] if items else result).get("stones") or {}
     average = valid_weight(stones.get("estimated_weight_g"))
     lower = valid_weight(stones.get("weight_min_g"))

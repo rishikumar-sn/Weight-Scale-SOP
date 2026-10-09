@@ -16,21 +16,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from backend.app.analysis.beads import onnx_image_size, prepare_onnx_input  # noqa: E402
 from backend.app.services.analysis_service import _adaptive_bead_nms  # noqa: E402
 
 
 def infer(session: ort.InferenceSession, image: np.ndarray, threshold: float) -> list[dict]:
     height, width = image.shape[:2]
-    scale = min(640.0 / width, 640.0 / height)
-    resized_width = max(1, int(round(width * scale)))
-    resized_height = max(1, int(round(height * scale)))
-    resized = cv2.resize(image, (resized_width, resized_height), interpolation=cv2.INTER_LINEAR)
-    left = (640 - resized_width) // 2
-    top = (640 - resized_height) // 2
-    canvas = np.full((640, 640, 3), 114, dtype=np.uint8)
-    canvas[top : top + resized_height, left : left + resized_width] = resized
-    tensor = np.ascontiguousarray(canvas[:, :, ::-1].transpose(2, 0, 1), dtype=np.float32) / 255.0
-    output = np.squeeze(session.run(None, {session.get_inputs()[0].name: tensor[None]})[0])
+    tensor, scale, left, top = prepare_onnx_input(image, onnx_image_size(session))
+    output = np.squeeze(session.run(None, {session.get_inputs()[0].name: tensor})[0])
     if output.ndim == 2 and output.shape[0] == 5:
         output = output.T
     boxes: list[list[int]] = []
@@ -128,7 +121,7 @@ def main() -> None:
     parser.add_argument("dataset", type=Path)
     parser.add_argument("--split", choices=("train", "valid", "test"), default="valid")
     parser.add_argument("--model", type=Path, default=PROJECT_ROOT / "models/detection/bead_finder.onnx")
-    parser.add_argument("--thresholds", type=float, nargs="+", default=[0.25, 0.4, 0.5, 0.6, 0.75])
+    parser.add_argument("--thresholds", type=float, nargs="+", default=[0.25, 0.35, 0.5, 0.6, 0.75])
     args = parser.parse_args()
     print(json.dumps(evaluate(args.model, args.dataset / args.split, args.thresholds), indent=2))
 

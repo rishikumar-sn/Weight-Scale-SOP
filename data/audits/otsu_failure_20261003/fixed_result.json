@@ -1,0 +1,878 @@
+{
+  "source_image": "fixed",
+  "image_shape": [
+    778,
+    871
+  ],
+  "ignored_regions": [],
+  "extraction_mode": "default",
+  "zoom_scale": 1,
+  "sahi_slicing": {
+    "enabled": true,
+    "slice_size": 256,
+    "overlap_ratio": 0.3,
+    "provider": "fallback"
+  },
+  "glare_preprocessing": {
+    "enabled": true,
+    "threshold": 225,
+    "patch_size": 14,
+    "saturation_max": 60
+  },
+  "color_correction": {
+    "saturation": 1.15,
+    "contrast": 1.1,
+    "brightness": 16.0
+  },
+  "analysis_normalization": {
+    "white_balance": true,
+    "clahe_clip_limit": 1.8,
+    "shadow_gamma": 0.92,
+    "color_boost": 1.15,
+    "green_recovery": 1.15,
+    "dark_green_recovery": 1.2
+  },
+  "background_calibration": null,
+  "learned_stone_profiles": [],
+  "jewel_count": 1,
+  "note": "Gemstone names are color-based possibilities only, not a lab-grade identification.",
+  "jewels": [
+    {
+      "jewel_id": 1,
+      "jewel_area_px": 219102,
+      "stone_area_px": 638,
+      "stone_seed_area_px": 356,
+      "stone_mask_area_gain": 1.792,
+      "stone_percentage": 0.29,
+      "outputs": {},
+      "detected_colors": [
+        {
+          "color": "Black",
+          "region_count": 6,
+          "area_px": 567,
+          "possible_gemstones": [
+            "Onyx",
+            "Black Diamond",
+            "Obsidian",
+            "Hematite",
+            "Black Spinel"
+          ],
+          "learned_labels": []
+        },
+        {
+          "color": "White/Colorless",
+          "region_count": 6,
+          "area_px": 71,
+          "possible_gemstones": [
+            "Diamond",
+            "White Sapphire",
+            "Quartz",
+            "Moonstone",
+            "Goshenite"
+          ],
+          "learned_labels": []
+        }
+      ],
+      "learned_representations": [],
+      "regions": [
+        {
+          "region_id": 1,
+          "color": "White/Colorless",
+          "possible_gemstones": [
+            "Diamond",
+            "White Sapphire",
+            "Quartz",
+            "Moonstone",
+            "Goshenite"
+          ],
+          "area_px": 4,
+          "seed_area_px": 4,
+          "stone_region_expansion": {
+            "enabled": true,
+            "seed_area_px": 4,
+            "expanded_area_px": 4,
+            "area_gain": 1.0,
+            "method": "seed_only"
+          },
+          "bbox": [
+            276,
+            18,
+            3,
+            2
+          ],
+          "center": [
+            277,
+            18
+          ],
+          "mean_hsv": [
+            18.0,
+            32.0,
+            186.5
+          ],
+          "mean_lab_ab": [
+            1.0,
+            8.2
+          ],
+          "lab_chroma_mean": 8.3,
+          "gold_overlap_percent": 0.0,
+          "color_mix_percent": {
+            "White/Colorless": 100.0
+          },
+          "dominant_share_percent": 100.0,
+          "extent": 0.667,
+          "aspect_ratio": 1.5,
+          "circularity": 0.539,
+          "learned_matches": [],
+          "boundary_share": 0.0,
+          "background_match_share": 0.0,
+          "max_boundary_depth_px": 13.59,
+          "micro_stone_supported": true,
+          "micro_stone_group_count": 3,
+          "micro_stone_group_area_px": 19,
+          "micro_stone_local_jewel_density": 0.943
+        },
+        {
+          "region_id": 2,
+          "color": "White/Colorless",
+          "possible_gemstones": [
+            "Diamond",
+            "White Sapphire",
+            "Quartz",
+            "Moonstone",
+            "Goshenite"
+          ],
+          "area_px": 9,
+          "seed_area_px": 9,
+          "stone_region_expansion": {
+            "enabled": true,
+            "seed_area_px": 9,
+            "expanded_area_px": 9,
+            "area_gain": 1.0,
+            "method": "seed_only"
+          },
+          "bbox": [
+            293,
+            27,
+            4,
+            4
+          ],
+          "center": [
+            294,
+            28
+          ],
+          "mean_hsv": [
+            22.4,
+            28.3,
+            200.7
+          ],
+          "mean_lab_ab": [
+            -0.8,
+            9.0
+          ],
+          "lab_chroma_mean": 9.0,
+          "gold_overlap_percent": 0.0,
+          "color_mix_percent": {
+            "White/Colorless": 100.0
+          },
+          "dominant_share_percent": 100.0,
+          "extent": 0.562,
+          "aspect_ratio": 1.0,
+          "circularity": 0.539,
+          "learned_matches": [],
+          "boundary_share": 0.222,
+          "background_match_share": 0.0,
+          "max_boundary_depth_px": 5.39,
+          "micro_stone_supported": true,
+          "micro_stone_group_count": 3,
+          "micro_stone_group_area_px": 19,
+          "micro_stone_local_jewel_density": 0.943
+        },
+        {
+          "region_id": 4,
+          "color": "White/Colorless",
+          "possible_gemstones": [
+            "Diamond",
+            "White Sapphire",
+            "Quartz",
+            "Moonstone",
+            "Goshenite"
+          ],
+          "area_px": 6,
+          "seed_area_px": 6,
+          "stone_region_expansion": {
+            "enabled": true,
+            "seed_area_px": 6,
+            "expanded_area_px": 6,
+            "area_gain": 1.0,
+            "method": "seed_only"
+          },
+          "bbox": [
+            287,
+            33,
+            2,
+            4
+          ],
+          "center": [
+            287,
+            34
+          ],
+          "mean_hsv": [
+            17.0,
+            31.5,
+            189.3
+          ],
+          "mean_lab_ab": [
+            1.5,
+            8.0
+          ],
+          "lab_chroma_mean": 8.2,
+          "gold_overlap_percent": 0.0,
+          "color_mix_percent": {
+            "White/Colorless": 100.0
+          },
+          "dominant_share_percent": 100.0,
+          "extent": 0.75,
+          "aspect_ratio": 2.0,
+          "circularity": 0.539,
+          "learned_matches": [],
+          "boundary_share": 0.0,
+          "background_match_share": 0.0,
+          "max_boundary_depth_px": 8.59,
+          "micro_stone_supported": true,
+          "micro_stone_group_count": 3,
+          "micro_stone_group_area_px": 19,
+          "micro_stone_local_jewel_density": 0.943
+        },
+        {
+          "region_id": 6,
+          "color": "White/Colorless",
+          "possible_gemstones": [
+            "Diamond",
+            "White Sapphire",
+            "Quartz",
+            "Moonstone",
+            "Goshenite"
+          ],
+          "area_px": 12,
+          "seed_area_px": 12,
+          "stone_region_expansion": {
+            "enabled": true,
+            "seed_area_px": 12,
+            "expanded_area_px": 12,
+            "area_gain": 1.0,
+            "method": "seed_only"
+          },
+          "bbox": [
+            359,
+            43,
+            4,
+            4
+          ],
+          "center": [
+            360,
+            44
+          ],
+          "mean_hsv": [
+            16.9,
+            30.2,
+            197.8
+          ],
+          "mean_lab_ab": [
+            1.2,
+            7.9
+          ],
+          "lab_chroma_mean": 8.0,
+          "gold_overlap_percent": 0.0,
+          "color_mix_percent": {
+            "White/Colorless": 100.0
+          },
+          "dominant_share_percent": 100.0,
+          "extent": 0.75,
+          "aspect_ratio": 1.0,
+          "circularity": 0.779,
+          "learned_matches": [],
+          "boundary_share": 0.0,
+          "background_match_share": 0.0,
+          "max_boundary_depth_px": 17.38,
+          "micro_stone_supported": true,
+          "micro_stone_group_count": 3,
+          "micro_stone_group_area_px": 38,
+          "micro_stone_local_jewel_density": 0.906
+        },
+        {
+          "region_id": 7,
+          "color": "White/Colorless",
+          "possible_gemstones": [
+            "Diamond",
+            "White Sapphire",
+            "Quartz",
+            "Moonstone",
+            "Goshenite"
+          ],
+          "area_px": 10,
+          "seed_area_px": 10,
+          "stone_region_expansion": {
+            "enabled": true,
+            "seed_area_px": 10,
+            "expanded_area_px": 10,
+            "area_gain": 1.0,
+            "method": "seed_only"
+          },
+          "bbox": [
+            341,
+            55,
+            5,
+            4
+          ],
+          "center": [
+            342,
+            56
+          ],
+          "mean_hsv": [
+            16.0,
+            22.9,
+            196.3
+          ],
+          "mean_lab_ab": [
+            1.4,
+            5.7
+          ],
+          "lab_chroma_mean": 5.9,
+          "gold_overlap_percent": 0.0,
+          "color_mix_percent": {
+            "White/Colorless": 100.0
+          },
+          "dominant_share_percent": 100.0,
+          "extent": 0.5,
+          "aspect_ratio": 1.25,
+          "circularity": 0.37,
+          "learned_matches": [],
+          "boundary_share": 0.3,
+          "background_match_share": 0.0,
+          "max_boundary_depth_px": 8.0,
+          "micro_stone_supported": true,
+          "micro_stone_group_count": 3,
+          "micro_stone_group_area_px": 38,
+          "micro_stone_local_jewel_density": 0.906
+        },
+        {
+          "region_id": 13,
+          "color": "White/Colorless",
+          "possible_gemstones": [
+            "Diamond",
+            "White Sapphire",
+            "Quartz",
+            "Moonstone",
+            "Goshenite"
+          ],
+          "area_px": 30,
+          "seed_area_px": 30,
+          "stone_region_expansion": {
+            "enabled": true,
+            "seed_area_px": 30,
+            "expanded_area_px": 30,
+            "area_gain": 1.0,
+            "method": "seed_only"
+          },
+          "bbox": [
+            232,
+            289,
+            8,
+            8
+          ],
+          "center": [
+            236,
+            293
+          ],
+          "mean_hsv": [
+            21.6,
+            29.7,
+            201.6
+          ],
+          "mean_lab_ab": [
+            -0.5,
+            9.3
+          ],
+          "lab_chroma_mean": 9.3,
+          "gold_overlap_percent": 0.0,
+          "color_mix_percent": {
+            "White/Colorless": 100.0
+          },
+          "dominant_share_percent": 100.0,
+          "extent": 0.469,
+          "aspect_ratio": 1.0,
+          "circularity": 0.513,
+          "learned_matches": [],
+          "boundary_share": 0.767,
+          "background_match_share": 0.0,
+          "max_boundary_depth_px": 5.39,
+          "micro_stone_supported": true,
+          "micro_stone_group_count": 3,
+          "micro_stone_group_area_px": 57,
+          "micro_stone_local_jewel_density": 0.686
+        },
+        {
+          "region_id": 15,
+          "color": "Black",
+          "possible_gemstones": [
+            "Onyx",
+            "Black Diamond",
+            "Obsidian",
+            "Hematite",
+            "Black Spinel"
+          ],
+          "area_px": 19,
+          "seed_area_px": 10,
+          "stone_region_expansion": {
+            "enabled": true,
+            "seed_area_px": 10,
+            "expanded_area_px": 19,
+            "area_gain": 1.9,
+            "method": "adaptive_region_grow",
+            "black_value_limit": 138.1,
+            "black_chroma_limit": 47.27,
+            "growth_radius_px": 5,
+            "maximum_area_px": 19,
+            "gold_overlap_px": 0,
+            "gold_overlap_share": 0.0
+          },
+          "bbox": [
+            717,
+            296,
+            7,
+            5
+          ],
+          "center": [
+            720,
+            298
+          ],
+          "mean_hsv": [
+            11.8,
+            255.0,
+            32.5
+          ],
+          "mean_lab_ab": [
+            7.6,
+            8.5
+          ],
+          "lab_chroma_mean": 11.6,
+          "gold_overlap_percent": 0.0,
+          "color_mix_percent": {
+            "Black": 100.0
+          },
+          "dominant_share_percent": 100.0,
+          "extent": 0.543,
+          "aspect_ratio": 1.4,
+          "circularity": 0.572,
+          "learned_matches": [],
+          "micro_stone_supported": true,
+          "micro_stone_group_count": 4,
+          "micro_stone_group_area_px": 68,
+          "micro_stone_local_jewel_density": 1.0
+        },
+        {
+          "region_id": 20,
+          "color": "Black",
+          "possible_gemstones": [
+            "Onyx",
+            "Black Diamond",
+            "Obsidian",
+            "Hematite",
+            "Black Spinel"
+          ],
+          "area_px": 8,
+          "seed_area_px": 5,
+          "stone_region_expansion": {
+            "enabled": true,
+            "seed_area_px": 5,
+            "expanded_area_px": 8,
+            "area_gain": 1.6,
+            "method": "adaptive_region_grow",
+            "black_value_limit": 139.0,
+            "black_chroma_limit": 47.7,
+            "growth_radius_px": 4,
+            "maximum_area_px": 13,
+            "gold_overlap_px": 0,
+            "gold_overlap_share": 0.0
+          },
+          "bbox": [
+            712,
+            308,
+            3,
+            4
+          ],
+          "center": [
+            713,
+            309
+          ],
+          "mean_hsv": [
+            15.0,
+            255.0,
+            34.9
+          ],
+          "mean_lab_ab": [
+            7.2,
+            10.1
+          ],
+          "lab_chroma_mean": 12.6,
+          "gold_overlap_percent": 0.0,
+          "color_mix_percent": {
+            "Black": 100.0
+          },
+          "dominant_share_percent": 100.0,
+          "extent": 0.667,
+          "aspect_ratio": 1.333,
+          "circularity": 0.857,
+          "learned_matches": [],
+          "micro_stone_supported": true,
+          "micro_stone_group_count": 4,
+          "micro_stone_group_area_px": 68,
+          "micro_stone_local_jewel_density": 1.0
+        },
+        {
+          "region_id": 21,
+          "color": "Black",
+          "possible_gemstones": [
+            "Onyx",
+            "Black Diamond",
+            "Obsidian",
+            "Hematite",
+            "Black Spinel"
+          ],
+          "area_px": 19,
+          "seed_area_px": 11,
+          "stone_region_expansion": {
+            "enabled": true,
+            "seed_area_px": 11,
+            "expanded_area_px": 19,
+            "area_gain": 1.727,
+            "method": "adaptive_region_grow",
+            "black_value_limit": 138.0,
+            "black_chroma_limit": 47.08,
+            "growth_radius_px": 7,
+            "maximum_area_px": 26,
+            "gold_overlap_px": 0,
+            "gold_overlap_share": 0.0
+          },
+          "bbox": [
+            709,
+            313,
+            6,
+            6
+          ],
+          "center": [
+            711,
+            315
+          ],
+          "mean_hsv": [
+            10.5,
+            255.0,
+            32.5
+          ],
+          "mean_lab_ab": [
+            7.7,
+            8.1
+          ],
+          "lab_chroma_mean": 11.6,
+          "gold_overlap_percent": 0.0,
+          "color_mix_percent": {
+            "Black": 100.0
+          },
+          "dominant_share_percent": 100.0,
+          "extent": 0.528,
+          "aspect_ratio": 1.0,
+          "circularity": 0.643,
+          "learned_matches": [],
+          "micro_stone_supported": true,
+          "micro_stone_group_count": 4,
+          "micro_stone_group_area_px": 68,
+          "micro_stone_local_jewel_density": 1.0
+        },
+        {
+          "region_id": 23,
+          "color": "Black",
+          "possible_gemstones": [
+            "Onyx",
+            "Black Diamond",
+            "Obsidian",
+            "Hematite",
+            "Black Spinel"
+          ],
+          "area_px": 22,
+          "seed_area_px": 11,
+          "stone_region_expansion": {
+            "enabled": true,
+            "seed_area_px": 11,
+            "expanded_area_px": 22,
+            "area_gain": 2.0,
+            "method": "adaptive_region_grow",
+            "black_value_limit": 138.0,
+            "black_chroma_limit": 46.31,
+            "growth_radius_px": 7,
+            "maximum_area_px": 22,
+            "gold_overlap_px": 0,
+            "gold_overlap_share": 0.0
+          },
+          "bbox": [
+            695,
+            328,
+            8,
+            5
+          ],
+          "center": [
+            698,
+            330
+          ],
+          "mean_hsv": [
+            11.3,
+            255.0,
+            33.1
+          ],
+          "mean_lab_ab": [
+            7.7,
+            8.5
+          ],
+          "lab_chroma_mean": 11.6,
+          "gold_overlap_percent": 0.0,
+          "color_mix_percent": {
+            "Black": 100.0
+          },
+          "dominant_share_percent": 100.0,
+          "extent": 0.55,
+          "aspect_ratio": 1.6,
+          "circularity": 0.587,
+          "learned_matches": [],
+          "micro_stone_supported": true,
+          "micro_stone_group_count": 4,
+          "micro_stone_group_area_px": 68,
+          "micro_stone_local_jewel_density": 1.0
+        },
+        {
+          "region_id": 41,
+          "color": "Black",
+          "possible_gemstones": [
+            "Onyx",
+            "Black Diamond",
+            "Obsidian",
+            "Hematite",
+            "Black Spinel"
+          ],
+          "area_px": 198,
+          "seed_area_px": 82,
+          "stone_region_expansion": {
+            "enabled": true,
+            "seed_area_px": 82,
+            "expanded_area_px": 198,
+            "area_gain": 2.415,
+            "method": "adaptive_region_grow",
+            "black_value_limit": 139.0,
+            "black_chroma_limit": 47.78,
+            "growth_radius_px": 16,
+            "maximum_area_px": 364,
+            "gold_overlap_px": 0,
+            "gold_overlap_share": 0.0
+          },
+          "bbox": [
+            356,
+            664,
+            22,
+            25
+          ],
+          "center": [
+            369,
+            672
+          ],
+          "mean_hsv": [
+            7.1,
+            255.0,
+            31.5
+          ],
+          "mean_lab_ab": [
+            9.1,
+            6.7
+          ],
+          "lab_chroma_mean": 11.6,
+          "gold_overlap_percent": 0.0,
+          "color_mix_percent": {
+            "Black": 100.0
+          },
+          "dominant_share_percent": 100.0,
+          "extent": 0.36,
+          "aspect_ratio": 1.136,
+          "circularity": 0.205,
+          "learned_matches": [],
+          "micro_stone_supported": false
+        },
+        {
+          "region_id": 42,
+          "color": "Black",
+          "possible_gemstones": [
+            "Onyx",
+            "Black Diamond",
+            "Obsidian",
+            "Hematite",
+            "Black Spinel"
+          ],
+          "area_px": 301,
+          "seed_area_px": 166,
+          "stone_region_expansion": {
+            "enabled": true,
+            "seed_area_px": 166,
+            "expanded_area_px": 301,
+            "area_gain": 1.824,
+            "method": "adaptive_region_grow",
+            "black_value_limit": 139.0,
+            "black_chroma_limit": 48.15,
+            "growth_radius_px": 16,
+            "maximum_area_px": 520,
+            "gold_overlap_px": 0,
+            "gold_overlap_share": 0.0
+          },
+          "bbox": [
+            341,
+            672,
+            25,
+            27
+          ],
+          "center": [
+            355,
+            682
+          ],
+          "mean_hsv": [
+            13.6,
+            254.1,
+            32.5
+          ],
+          "mean_lab_ab": [
+            6.1,
+            9.3
+          ],
+          "lab_chroma_mean": 11.6,
+          "gold_overlap_percent": 0.0,
+          "color_mix_percent": {
+            "Black": 100.0
+          },
+          "dominant_share_percent": 100.0,
+          "extent": 0.446,
+          "aspect_ratio": 1.08,
+          "circularity": 0.192,
+          "learned_matches": [],
+          "micro_stone_supported": false
+        }
+      ],
+      "bbox_global": [
+        18,
+        16,
+        742,
+        837
+      ],
+      "stone_area_statistics": {
+        "success": false,
+        "error": "stone_area_calculator not available"
+      },
+      "mask_cleanup": {
+        "measurement_space": "native_crop_pixels",
+        "input_jewel_area_px": 219102,
+        "background_hole_pixels_removed": 0,
+        "background_hole_count": 0,
+        "refined_jewel_area_px": 219102,
+        "analysis_zoom_scale": 1,
+        "background_hole_pixels_removed_analysis": 0
+      },
+      "seeded_instance_separation": {
+        "enabled": true,
+        "input_region_count": 12,
+        "touching_cluster_count": 0,
+        "separated_region_count": 0,
+        "overlap_pixels_resolved": 0,
+        "boundary_pixels_removed": 0,
+        "disconnected_pixels_removed": 0
+      },
+      "stone_analysis_v2": {
+        "enabled": false,
+        "fallback": "legacy_regions",
+        "candidate_count": 12,
+        "stone_instance_count": 12,
+        "segmentation_method_counts": {
+          "legacy": 12
+        }
+      },
+      "stone_instance_count": 12,
+      "segmentation_method_counts": {
+        "legacy": 12
+      },
+      "debug_artifacts": {},
+      "stone_measurements": {
+        "success": false,
+        "error": "Metric calibration is unavailable.",
+        "instances": []
+      },
+      "glare_mask_px": 0,
+      "glare_region_count": 0,
+      "glare_inpaint_px": 0,
+      "reflection": {
+        "coverage_percent": 0.0,
+        "local_density_percent": 0.0,
+        "region_count": 0,
+        "largest_region_px": 0,
+        "largest_region_percent": 0.0,
+        "flagged": false,
+        "risk_status": "NORMAL",
+        "possible_transparent_stones": false,
+        "level": "normal",
+        "message": "No dense reflection signature detected."
+      },
+      "skipped_stone_detection": false,
+      "gold_support_px": 210512,
+      "gold_support_ratio": 0.9608
+    }
+  ],
+  "seeded_instance_separation": {
+    "enabled": true,
+    "touching_cluster_count": 0,
+    "separated_region_count": 0,
+    "overlap_pixels_resolved": 0,
+    "boundary_pixels_removed": 0,
+    "disconnected_pixels_removed": 0
+  },
+  "jewel_area_px_total": 219102,
+  "stone_area_px_total": 638,
+  "stone_seed_area_px_total": 356,
+  "stone_mask_area_gain": 1.792,
+  "stone_percentage": 0.29,
+  "area_denominator": "sum_of_segmented_jewel_masks",
+  "stone_surface_coverage_percent": 0.29,
+  "stone_instance_count": 12,
+  "segmentation_method_counts": {
+    "legacy": 12
+  },
+  "background_hole_pixels_removed": 0,
+  "background_hole_count": 0,
+  "reflection_flagged": false,
+  "reflection_risk": false,
+  "risk_jewel": false,
+  "risk_reasons": [],
+  "stone_surface_risk": {
+    "level": "MEDIUM",
+    "status": "MEDIUM RISK - STONES DETECTED",
+    "stone_surface_coverage_percent": 0.29,
+    "stone_instance_count": 12,
+    "high_risk": false
+  },
+  "stone_surface_risk_level": "MEDIUM",
+  "stone_surface_status": "MEDIUM RISK - STONES DETECTED",
+  "stone_measurements": {
+    "success": false,
+    "total_area_mm2": null,
+    "instance_count": 0,
+    "estimated_total_average_ct": 0,
+    "estimated_total_minimum_ct": 0,
+    "estimated_total_maximum_ct": 0,
+    "estimated_total_average_g": 0,
+    "estimated_total_typical_g": 0,
+    "estimated_total_minimum_g": 0,
+    "estimated_total_maximum_g": 0,
+    "instances": [],
+    "note": "Face-up geometry is measured; hidden depth and material density remain uncertain."
+  }
+}

@@ -144,6 +144,19 @@ devices even when completed sessions are later synchronized to a cloud server.
   result to each item. Bangles/rings receive OD/ID analysis; other jewel types
   receive their configured bead/stone analysis independently.
 
+### Bead analysis
+
+`models/detection/bead_finder.onnx` is an Ultralytics detector. The backend reads
+its `imgsz` metadata and input tensor dimensions instead of assuming a fixed
+resolution, and uses a `0.35` confidence threshold. Each accepted box is counted
+directly; there is no secondary MobileNet verifier.
+
+When AprilTag calibration is available, bead size is reported from the geometric
+mean of the calibrated box width and height: tiny below 3 mm, small from 3 mm to
+below 6 mm, and large from 6 mm. Color uses one HSV conversion and at most a
+24x24 inner-ellipse sample per bead. The result also reports continuous/repetitive,
+well-spaced, or mixed spacing based on box-size and nearest-neighbor consistency.
+
 ## Regression checks
 
 ```powershell

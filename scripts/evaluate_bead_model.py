@@ -14,6 +14,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from backend.app.analysis.beads import onnx_image_size, prepare_onnx_input  # noqa: E402
 from backend.app.services.analysis_service import _adaptive_bead_nms  # noqa: E402
 
 
@@ -23,16 +24,8 @@ def detector_scores(
     minimum_score: float,
 ) -> list[float]:
     height, width = image.shape[:2]
-    scale = min(640.0 / width, 640.0 / height)
-    resized_width = max(1, int(round(width * scale)))
-    resized_height = max(1, int(round(height * scale)))
-    resized = cv2.resize(image, (resized_width, resized_height), interpolation=cv2.INTER_LINEAR)
-    left = (640 - resized_width) // 2
-    top = (640 - resized_height) // 2
-    canvas = np.full((640, 640, 3), 114, dtype=np.uint8)
-    canvas[top : top + resized_height, left : left + resized_width] = resized
-    tensor = np.ascontiguousarray(canvas[:, :, ::-1].transpose(2, 0, 1), dtype=np.float32) / 255.0
-    output = np.asarray(session.run(None, {session.get_inputs()[0].name: tensor[None]})[0])
+    tensor, scale, left, top = prepare_onnx_input(image, onnx_image_size(session))
+    output = np.asarray(session.run(None, {session.get_inputs()[0].name: tensor})[0])
     predictions = np.squeeze(output)
     if predictions.ndim == 2 and predictions.shape[0] == 5:
         predictions = predictions.T
@@ -77,7 +70,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Audit the bead ONNX model on saved raw item crops.")
     parser.add_argument("--model", type=Path, default=PROJECT_ROOT / "models/detection/bead_finder.onnx")
     parser.add_argument("--sessions", type=Path, default=PROJECT_ROOT / "data/sessions")
-    parser.add_argument("--thresholds", type=float, nargs="+", default=[0.50, 0.60, 0.70, 0.75])
+    parser.add_argument("--thresholds", type=float, nargs="+", default=[0.35, 0.50, 0.60, 0.75])
     args = parser.parse_args()
 
     session = ort.InferenceSession(str(args.model), providers=["CPUExecutionProvider"])

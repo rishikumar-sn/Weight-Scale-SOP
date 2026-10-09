@@ -413,7 +413,7 @@ class ReportService:
         story.extend([Paragraph("Capture details", heading), table])
 
         result = state.get("result") or {}
-        if any(
+        if int(result.get("count") or len(result.get("items") or [])) == 1 and any(
             (item.get("route") or {}).get("stones") or item.get("stones")
             for item in (result.get("items") or [result])
         ):
@@ -488,10 +488,12 @@ class ReportService:
                             body,
                         )
                     )
+                    if beads_item.get("summary"):
+                        story.append(Paragraph(str(beads_item["summary"]), body))
                 stones_item = item.get("stones") or {}
                 if stones_item:
                     story.append(Paragraph(str(stones_item.get("risk_status") or "Stone analysis complete"), body))
-                    if stones_item.get("estimated_weight_g") is not None:
+                    if len(result_items) == 1 and stones_item.get("estimated_weight_g") is not None:
                         story.append(Paragraph(
                             f"Estimated stone weight: {stones_item['estimated_weight_g']:.2f} g; "
                             f"range: {stones_item['weight_min_g']:.2f} - {stones_item['weight_max_g']:.2f} g",
@@ -543,6 +545,8 @@ class ReportService:
                     body,
                 ),
             ])
+            if beads.get("summary"):
+                story.append(Paragraph(str(beads["summary"]), body))
 
         stones = (result.get("stones") or {}) if not result_items else {}
         if stones:

@@ -1,0 +1,202 @@
+{
+  "sessions": [
+    {
+      "session": "20261003_121545_03d7d4e1",
+      "same_pixels": true,
+      "old_pixels": 209434,
+      "new_pixels": 209434,
+      "old_items": 4,
+      "new_items": 4
+    },
+    {
+      "session": "20261003_121434_47a19c04",
+      "same_pixels": true,
+      "old_pixels": 208457,
+      "new_pixels": 208457,
+      "old_items": 4,
+      "new_items": 4
+    },
+    {
+      "session": "20261003_120006_b2866e53",
+      "same_pixels": false,
+      "old_pixels": 801186,
+      "new_pixels": 220976,
+      "old_items": 1,
+      "new_items": 1
+    },
+    {
+      "session": "20261003_115725_9125cee2",
+      "same_pixels": true,
+      "old_pixels": 127694,
+      "new_pixels": 127694,
+      "old_items": 1,
+      "new_items": 1
+    },
+    {
+      "session": "20261001_154041_6b538611",
+      "same_pixels": true,
+      "old_pixels": 47099,
+      "new_pixels": 47099,
+      "old_items": 1,
+      "new_items": 1
+    },
+    {
+      "session": "20261001_153820_3aea08b2",
+      "same_pixels": true,
+      "old_pixels": 94705,
+      "new_pixels": 94705,
+      "old_items": 1,
+      "new_items": 1
+    },
+    {
+      "session": "20260929_154815_73d25812",
+      "same_pixels": true,
+      "old_pixels": 41859,
+      "new_pixels": 41859,
+      "old_items": 1,
+      "new_items": 1
+    },
+    {
+      "session": "20260929_154638_565bcd47",
+      "same_pixels": true,
+      "old_pixels": 52995,
+      "new_pixels": 52995,
+      "old_items": 1,
+      "new_items": 1
+    },
+    {
+      "session": "20260929_154230_7a0c439e",
+      "same_pixels": true,
+      "old_pixels": 89188,
+      "new_pixels": 89188,
+      "old_items": 13,
+      "new_items": 13
+    },
+    {
+      "session": "20260929_153941_7d28e868",
+      "same_pixels": true,
+      "old_pixels": 89015,
+      "new_pixels": 89015,
+      "old_items": 13,
+      "new_items": 13
+    },
+    {
+      "session": "20260929_153717_c495d74d",
+      "same_pixels": true,
+      "old_pixels": 33183,
+      "new_pixels": 33183,
+      "old_items": 5,
+      "new_items": 5
+    },
+    {
+      "session": "20260929_153549_df4f5bbc",
+      "same_pixels": true,
+      "old_pixels": 78877,
+      "new_pixels": 78877,
+      "old_items": 3,
+      "new_items": 3
+    },
+    {
+      "session": "20260929_153333_e1ad446c",
+      "same_pixels": true,
+      "old_pixels": 82511,
+      "new_pixels": 82511,
+      "old_items": 3,
+      "new_items": 3
+    },
+    {
+      "session": "20260929_153146_fe2b9554",
+      "same_pixels": true,
+      "old_pixels": 27853,
+      "new_pixels": 27853,
+      "old_items": 1,
+      "new_items": 1
+    },
+    {
+      "session": "20260929_152928_f10c1412",
+      "same_pixels": true,
+      "old_pixels": 91817,
+      "new_pixels": 91817,
+      "old_items": 1,
+      "new_items": 1
+    },
+    {
+      "session": "20260929_152759_3fd7ec2c",
+      "same_pixels": true,
+      "old_pixels": 50719,
+      "new_pixels": 50719,
+      "old_items": 1,
+      "new_items": 1
+    },
+    {
+      "session": "20260929_152630_50db480a",
+      "same_pixels": true,
+      "old_pixels": 72462,
+      "new_pixels": 72462,
+      "old_items": 1,
+      "new_items": 1
+    },
+    {
+      "session": "20260929_152435_4393c815",
+      "same_pixels": true,
+      "old_pixels": 66447,
+      "new_pixels": 66447,
+      "old_items": 1,
+      "new_items": 1
+    },
+    {
+      "session": "20260929_152158_5ce404d5",
+      "same_pixels": true,
+      "old_pixels": 55879,
+      "new_pixels": 55879,
+      "old_items": 1,
+      "new_items": 1
+    },
+    {
+      "session": "20260929_151941_64da4195",
+      "same_pixels": true,
+      "old_pixels": 44003,
+      "new_pixels": 44003,
+      "old_items": 1,
+      "new_items": 1
+    },
+    {
+      "session": "20260929_151829_2347e82e",
+      "same_pixels": true,
+      "old_pixels": 102128,
+      "new_pixels": 102128,
+      "old_items": 1,
+      "new_items": 1
+    },
+    {
+      "session": "20260929_151724_438e348e",
+      "same_pixels": true,
+      "old_pixels": 101733,
+      "new_pixels": 101733,
+      "old_items": 1,
+      "new_items": 1
+    },
+    {
+      "session": "20260929_151604_ee7202f3",
+      "same_pixels": true,
+      "old_pixels": 107900,
+      "new_pixels": 107900,
+      "old_items": 1,
+      "new_items": 1
+    },
+    {
+      "session": "20260929_151514_c2f876da",
+      "same_pixels": true,
+      "old_pixels": 107567,
+      "new_pixels": 107567,
+      "old_items": 1,
+      "new_items": 1
+    }
+  ],
+  "summary": {
+    "tested": 24,
+    "pixel_exact_unchanged": 23,
+    "changed": 1,
+    "item_count_preserved": 24
+  }
+}

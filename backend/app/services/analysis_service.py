@@ -15,10 +15,15 @@ import numpy as np
 import onnxruntime as ort
 from PIL import Image
 
+from ..analysis.beads import analyze_bead_detections, onnx_image_size, prepare_onnx_input
 from ..analysis.vision import separate_jewellery_items
 from ..core.config import PROJECT_ROOT
 from ..domain.workflow import route_for_label
-from ..domain.weights import stone_weight_fields, weight_summary
+from ..domain.weights import (
+    stone_weight_fields,
+    weight_summary,
+    without_stone_weight_estimates,
+)
 
 
 for module_path in (
@@ -36,23 +41,7 @@ import StoneDetection.jewel_gem_hsv_report as stone_detection  # noqa: E402
 BEAD_NMS_SMALL_IOU = 0.45
 BEAD_NMS_MEDIUM_IOU = 0.60
 BEAD_NMS_LARGE_IOU = 0.72
-# Keep the detector cutoff aligned with the production Hailo pipeline.  The
-# exported ONNX model emits many valid beads between 0.50 and 0.75, so the old
-# 0.75 cutoff incorrectly turned clear bead jewellery into "not detected".
-BEAD_DETECTION_SCORE_THRESHOLD = 0.50
-BEAD_FALSE_POSITIVE_THRESHOLD = 0.75
-# Temporary detector-only test mode requested during live bead validation.
-# Keep the verifier model and telemetry code available so it can be restored
-# after the detector results have been reviewed.
-BEAD_FALSE_POSITIVE_VERIFICATION_ENABLED = False
-BEAD_MIN_VERIFIED_COUNT = 2
-# Historical replay with the current detector found that genuine pearl work can
-# pass the crop verifier at 22.5%, while plain rope-chain false positives pass
-# at 0%. Keep a little margin below the observed genuine case.
-BEAD_MIN_VERIFICATION_RATIO = 0.20
-BEAD_RED_FALLBACK_MIN_CANDIDATES = 2
-BEAD_RED_FALLBACK_MIN_COMPONENTS = 8
-BEAD_RED_FALLBACK_MAX_AREA_CV = 0.45
+BEAD_DETECTION_SCORE_THRESHOLD = 0.35
 FINGER_RING_MAX_OUTER_SPAN_MM = 35.0
 BANGLE_MIN_OUTER_SPAN_MM = 40.0
 
@@ -213,252 +202,29 @@ def _box_center_in_region(bbox: list[int], region: dict[str, int] | None) -> boo
     )
 
 
-def _bead_evidence_image(
-    image_bgr: np.ndarray,
-    region: dict[str, int] | None,
-) -> tuple[np.ndarray, int, int]:
-    """Return the item region used by the colour fallback and its full-ROI offset."""
-    if not region:
-        return image_bgr, 0, 0
-    image_h, image_w = image_bgr.shape[:2]
-    x1 = max(0, min(image_w, int(region["x"])))
-    y1 = max(0, min(image_h, int(region["y"])))
-    x2 = max(x1, min(image_w, x1 + int(region["w"])))
-    y2 = max(y1, min(image_h, y1 + int(region["h"])))
-    return image_bgr[y1:y2, x1:x2], x1, y1
-
-
-def _bead_classifier_crop(
-    image_bgr: np.ndarray,
-    bbox: list[int],
-    padding_ratio: float = 0.05,
-) -> np.ndarray:
-    """Match the production false-positive classifier crop preparation."""
-    x1, y1, x2, y2 = (int(value) for value in bbox)
-    width = max(1, x2 - x1)
-    height = max(1, y2 - y1)
-    crop_width = max(1, int(math.ceil(width * (1.0 + 2.0 * padding_ratio))))
-    crop_height = max(1, int(math.ceil(height * (1.0 + 2.0 * padding_ratio))))
-    center_x = (x1 + x2) / 2.0
-    center_y = (y1 + y2) / 2.0
-    crop_x1 = int(math.floor(center_x - crop_width / 2.0))
-    crop_y1 = int(math.floor(center_y - crop_height / 2.0))
-    crop_x2 = crop_x1 + crop_width
-    crop_y2 = crop_y1 + crop_height
-    image_h, image_w = image_bgr.shape[:2]
-    source_x1, source_y1 = max(0, crop_x1), max(0, crop_y1)
-    source_x2, source_y2 = min(image_w, crop_x2), min(image_h, crop_y2)
-    rectangular = np.full((crop_height, crop_width, 3), 114, dtype=np.uint8)
-    if source_x2 > source_x1 and source_y2 > source_y1:
-        target_x1 = source_x1 - crop_x1
-        target_y1 = source_y1 - crop_y1
-        rectangular[
-            target_y1 : target_y1 + source_y2 - source_y1,
-            target_x1 : target_x1 + source_x2 - source_x1,
-        ] = image_bgr[source_y1:source_y2, source_x1:source_x2]
-    side = max(crop_width, crop_height)
-    crop = np.full((side, side, 3), 114, dtype=np.uint8)
-    left = (side - crop_width) // 2
-    top = (side - crop_height) // 2
-    crop[top : top + crop_height, left : left + crop_width] = rectangular
-    return crop
-
-
-def _repeated_red_bead_evidence(image_bgr: np.ndarray) -> dict[str, Any]:
-    """Measure repeated, similarly sized dark-red bead bodies in the image.
-
-    This narrowly recovers rudraksha/coral-style beads that are outside the
-    verifier's training domain.  Repetition and area consistency prevent an
-    ornate setting with a mixture of red stone sizes from becoming a fallback.
-    """
-    hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
-    hue, saturation, value = cv2.split(hsv)
-    red = (
-        (saturation >= 70)
-        & (value >= 35)
-        & (value <= 210)
-        & ((hue <= 10) | (hue >= 165))
-    ).astype(np.uint8) * 255
-    red = cv2.morphologyEx(
-        red,
-        cv2.MORPH_CLOSE,
-        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)),
-        iterations=1,
-    )
-    component_count, labels, stats, _ = cv2.connectedComponentsWithStats(red, 8)
-    minimum_area = max(18, int(red.size * 0.00004))
-    maximum_area = max(minimum_area + 1, int(red.size * 0.035))
-    components: list[dict[str, Any]] = []
-    for label in range(1, component_count):
-        area = int(stats[label, cv2.CC_STAT_AREA])
-        width = int(stats[label, cv2.CC_STAT_WIDTH])
-        height = int(stats[label, cv2.CC_STAT_HEIGHT])
-        if not minimum_area <= area <= maximum_area or min(width, height) <= 2:
-            continue
-        component = np.where(labels == label, 255, 0).astype(np.uint8)
-        contours, _ = cv2.findContours(component, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not contours:
-            continue
-        contour = max(contours, key=cv2.contourArea)
-        perimeter = float(cv2.arcLength(contour, True))
-        circularity = (
-            4.0 * math.pi * float(cv2.contourArea(contour)) / (perimeter * perimeter)
-            if perimeter > 0
-            else 0.0
-        )
-        aspect_ratio = max(width, height) / float(max(1, min(width, height)))
-        if circularity >= 0.35 and aspect_ratio <= 2.2:
-            x = int(stats[label, cv2.CC_STAT_LEFT])
-            y = int(stats[label, cv2.CC_STAT_TOP])
-            components.append(
-                {
-                    "bbox": [x, y, x + width, y + height],
-                    "area_px": area,
-                    "circularity": round(circularity, 3),
-                }
-            )
-    areas = [int(component["area_px"]) for component in components]
-    area_array = np.asarray(areas, dtype=np.float32)
-    area_cv = (
-        float(np.std(area_array) / max(1.0, float(np.mean(area_array))))
-        if area_array.size
-        else 0.0
-    )
-    supported = (
-        len(components) >= BEAD_RED_FALLBACK_MIN_COMPONENTS
-        and area_cv <= BEAD_RED_FALLBACK_MAX_AREA_CV
-    )
-    return {
-        "supported": supported,
-        "component_count": len(components),
-        "median_area_px": round(float(np.median(area_array)), 1) if area_array.size else 0.0,
-        "area_coefficient_of_variation": round(area_cv, 3),
-        "minimum_component_count": BEAD_RED_FALLBACK_MIN_COMPONENTS,
-        "maximum_area_coefficient_of_variation": BEAD_RED_FALLBACK_MAX_AREA_CV,
-        "components": components,
-    }
-
-
-def _bead_presence_decision(
-    candidate_count: int,
-    verified_count: int,
-    repeated_red_evidence: dict[str, Any],
-) -> tuple[bool, str, float]:
-    acceptance_ratio = verified_count / float(max(1, candidate_count))
-    verified_consensus = (
-        verified_count >= BEAD_MIN_VERIFIED_COUNT
-        and acceptance_ratio >= BEAD_MIN_VERIFICATION_RATIO
-    )
-    red_fallback = (
-        candidate_count >= BEAD_RED_FALLBACK_MIN_CANDIDATES
-        and bool(repeated_red_evidence.get("supported"))
-    )
-    if verified_consensus:
-        return True, "verified_consensus", acceptance_ratio
-    if red_fallback:
-        return True, "repeated_red_bead_fallback", acceptance_ratio
-    return False, "insufficient_verified_bead_evidence", acceptance_ratio
-
-
-def _bead_detector_only_decision(candidate_count: int) -> tuple[bool, str]:
-    detected = candidate_count >= BEAD_MIN_VERIFIED_COUNT
-    return (
-        detected,
-        "detector_consensus" if detected else "insufficient_detector_evidence",
-    )
-
-
-class BeadFalsePositiveFilter:
-    def __init__(
-        self,
-        model_path: Path,
-        threshold: float = BEAD_FALSE_POSITIVE_THRESHOLD,
-    ) -> None:
-        self.model_path = model_path
-        self.threshold = float(threshold)
-        self.model: Any = None
-        self.torch: Any = None
-        self.transform: Any = None
-        self.image_type: Any = None
-        self.lock = threading.Lock()
-
-    def _load(self) -> None:
-        if self.model is not None:
-            return
-        if not self.model_path.is_file():
-            raise FileNotFoundError(f"Bead verification model not found: {self.model_path}")
-        import torch
-        from PIL import Image
-        from torch import nn
-        from torchvision import models, transforms
-
-        model = models.mobilenet_v3_small(weights=None)
-        model.classifier[-1] = nn.Linear(model.classifier[-1].in_features, 2)
-        model.load_state_dict(torch.load(self.model_path, map_location="cpu", weights_only=True))
-        model.eval()
-        self.model = model
-        self.torch = torch
-        self.image_type = Image
-        self.transform = transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.ToTensor(),
-            transforms.Normalize(
-                mean=[0.485, 0.456, 0.406],
-                std=[0.229, 0.224, 0.225],
-            ),
-        ])
-
-    def accept(self, crops_bgr: list[np.ndarray]) -> list[dict[str, Any]]:
-        if not crops_bgr:
-            return []
-        with self.lock:
-            self._load()
-            tensors = []
-            for crop_bgr in crops_bgr:
-                rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
-                tensors.append(self.transform(self.image_type.fromarray(rgb)))
-            inputs = self.torch.stack(tensors)
-            with self.torch.inference_mode():
-                probabilities = self.torch.softmax(self.model(inputs), dim=1).cpu().numpy()
-        return [
-            {
-                "accepted": float(probability[1]) >= self.threshold,
-                "true_detection_probability": float(probability[1]),
-            }
-            for probability in probabilities
-        ]
-
-
 class OnnxBeadDetector:
     def __init__(
         self,
         model_path: Path,
-        verifier_path: Path,
         providers: list[str] | None = None,
     ) -> None:
         providers = providers or ["CPUExecutionProvider"]
         self.session = ort.InferenceSession(str(model_path), providers=providers)
         self.input_name = self.session.get_inputs()[0].name
+        self.input_size = onnx_image_size(self.session)
         self.model_name = model_path.name
-        self.verifier = BeadFalsePositiveFilter(verifier_path)
+        self.model_metadata = self.session.get_modelmeta().custom_metadata_map or {}
 
     def run(
         self,
         image: np.ndarray,
         threshold: float = BEAD_DETECTION_SCORE_THRESHOLD,
         detection_region: dict[str, int] | None = None,
+        measurement_scale: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], np.ndarray, np.ndarray]:
         height, width = image.shape[:2]
-        scale = min(640.0 / width, 640.0 / height)
-        resized_width = max(1, int(round(width * scale)))
-        resized_height = max(1, int(round(height * scale)))
-        resized = cv2.resize(image, (resized_width, resized_height), interpolation=cv2.INTER_LINEAR)
-        left = (640 - resized_width) // 2
-        top = (640 - resized_height) // 2
-        canvas = np.full((640, 640, 3), 114, dtype=np.uint8)
-        canvas[top : top + resized_height, left : left + resized_width] = resized
-        tensor = np.ascontiguousarray(canvas[:, :, ::-1].transpose(2, 0, 1), dtype=np.float32) / 255.0
-        output = np.asarray(self.session.run(None, {self.input_name: tensor[None]})[0])
+        tensor, scale, left, top = prepare_onnx_input(image, self.input_size)
+        output = np.asarray(self.session.run(None, {self.input_name: tensor})[0])
         predictions = np.squeeze(output)
         if predictions.ndim == 2 and predictions.shape[0] == 5:
             predictions = predictions.T
@@ -483,6 +249,10 @@ class OnnxBeadDetector:
             for index in selected
             if _box_center_in_region(boxes[index], detection_region)
         ]
+        detections = [dict(candidate) for candidate in candidates]
+        bead_analysis = analyze_bead_detections(image, detections, measurement_scale)
+        beads_detected = bool(detections)
+
         onnx_annotated = image.copy()
         for number, candidate in enumerate(candidates, start=1):
             x1, y1, x2, y2 = candidate["bbox"]
@@ -509,103 +279,43 @@ class OnnxBeadDetector:
             2,
             cv2.LINE_AA,
         )
-        checks = (
-            self.verifier.accept([
-                _bead_classifier_crop(image, candidate["bbox"])
-                for candidate in candidates
-            ])
-            if BEAD_FALSE_POSITIVE_VERIFICATION_ENABLED
-            else [
-                {"accepted": True, "true_detection_probability": None}
-                for _ in candidates
-            ]
-        )
-        checked_detections = [
-            {
-                **candidate,
-                "verification_accepted": (
-                    check["accepted"]
-                    if BEAD_FALSE_POSITIVE_VERIFICATION_ENABLED
-                    else None
-                ),
-                "true_detection_probability": check["true_detection_probability"],
-                "accepted": check["accepted"],
-                "acceptance_source": (
-                    "verifier"
-                    if BEAD_FALSE_POSITIVE_VERIFICATION_ENABLED
-                    else "detector_only"
-                ),
-            }
-            for candidate, check in zip(candidates, checks)
-        ]
-        verified_detections = [
-            detection
-            for detection in checked_detections
-            if detection["verification_accepted"]
-        ]
-        evidence_image, evidence_offset_x, evidence_offset_y = _bead_evidence_image(
-            image,
-            detection_region,
-        )
-        repeated_red_evidence = _repeated_red_bead_evidence(evidence_image)
-        if evidence_offset_x or evidence_offset_y:
-            for component in repeated_red_evidence["components"]:
-                x1, y1, x2, y2 = component["bbox"]
-                component["bbox"] = [
-                    x1 + evidence_offset_x,
-                    y1 + evidence_offset_y,
-                    x2 + evidence_offset_x,
-                    y2 + evidence_offset_y,
-                ]
-        if BEAD_FALSE_POSITIVE_VERIFICATION_ENABLED:
-            beads_detected, decision_source, verification_acceptance_ratio = (
-                _bead_presence_decision(
-                    len(candidates),
-                    len(verified_detections),
-                    repeated_red_evidence,
-                )
-            )
-        else:
-            beads_detected, decision_source = _bead_detector_only_decision(len(candidates))
-            verification_acceptance_ratio = 0.0
-        red_fallback_used = decision_source == "repeated_red_bead_fallback"
-        detections = (
-            [
-                {
-                    **component,
-                    "score": None,
-                    "verification_accepted": False,
-                    "true_detection_probability": None,
-                    "accepted": True,
-                    "acceptance_source": "repeated_red_bead_fallback",
-                }
-                for component in repeated_red_evidence["components"]
-            ]
-            if red_fallback_used
-            else (
-                (
-                    verified_detections
-                    if BEAD_FALSE_POSITIVE_VERIFICATION_ENABLED
-                    else checked_detections
-                )
-                if beads_detected
-                else []
-            )
-        )
         annotated = image.copy()
         for detection in detections:
             x1, y1, x2, y2 = detection["bbox"]
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), (24, 170, 90), 3, cv2.LINE_AA)
+            category = detection.get("size_category")
+            box_color = {
+                "tiny": (255, 180, 20),
+                "small": (24, 170, 90),
+                "large": (190, 60, 210),
+            }.get(category, (24, 170, 90))
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), box_color, 3, cv2.LINE_AA)
         bead_status = "Beads detected" if beads_detected else "Beads not detected"
-        header_width = min(width - 10, 330)
-        cv2.rectangle(annotated, (10, 10), (header_width, 56), (18, 24, 32), -1)
+        size_counts = bead_analysis["size"].get("counts") or {}
+        detail = (
+            f"Large {size_counts.get('large', 0)}  Small {size_counts.get('small', 0)}  "
+            f"Tiny {size_counts.get('tiny', 0)}"
+            if bead_analysis["size"].get("available") and detections
+            else bead_analysis["arrangement"]["description"]
+        )
+        header_width = min(width - 10, 570)
+        cv2.rectangle(annotated, (10, 10), (header_width, 88), (18, 24, 32), -1)
         cv2.putText(
             annotated,
-            bead_status,
-            (20, 43),
+            f"{bead_status}: {len(detections)}",
+            (20, 42),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.85,
+            0.82,
             (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            annotated,
+            detail,
+            (20, 72),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.62,
+            (210, 220, 230),
             2,
             cv2.LINE_AA,
         )
@@ -617,51 +327,26 @@ class OnnxBeadDetector:
             "candidate_count": len(candidates),
             "onnx_count": len(candidates),
             "onnx_detections": candidates,
-            "verification_enabled": BEAD_FALSE_POSITIVE_VERIFICATION_ENABLED,
-            "verified_count": (
-                len(verified_detections)
-                if BEAD_FALSE_POSITIVE_VERIFICATION_ENABLED
-                else None
-            ),
-            "verification_acceptance_ratio": (
-                round(verification_acceptance_ratio, 4)
-                if BEAD_FALSE_POSITIVE_VERIFICATION_ENABLED
-                else None
-            ),
-            "verification_rejected_count": (
-                len(candidates) - len(verified_detections)
-                if BEAD_FALSE_POSITIVE_VERIFICATION_ENABLED
-                else None
-            ),
-            # Backward-compatible alias. This is classifier telemetry rather
-            # than labelled detector ground truth.
-            "false_positive_count": (
-                len(candidates) - len(verified_detections)
-                if BEAD_FALSE_POSITIVE_VERIFICATION_ENABLED
-                else None
-            ),
             "detections": detections,
             "count": len(detections),
-            "verification_fallback_used": red_fallback_used,
-            "decision_source": decision_source,
+            "decision_source": "onnx_detector",
             "decision_reason": (
-                f"Detector-only test mode accepted {len(candidates)} candidates."
-                if decision_source == "detector_consensus"
-                else f"Detector-only test mode found only {len(candidates)} candidate; at least {BEAD_MIN_VERIFIED_COUNT} are required."
-                if decision_source == "insufficient_detector_evidence"
-                else f"{len(verified_detections)} of {len(candidates)} candidates passed verification."
-                if decision_source == "verified_consensus"
-                else (
-                    "Repeated similarly sized dark-red bead bodies supported the detector candidates."
-                    if red_fallback_used
-                    else f"Only {len(verified_detections)} of {len(candidates)} candidates passed verification; bead evidence was insufficient."
-                )
+                f"The detector found {len(detections)} candidate"
+                f"{'s' if len(detections) != 1 else ''} at confidence {threshold:.2f}."
             ),
-            "repeated_red_bead_evidence": repeated_red_evidence,
+            **bead_analysis,
             "model": self.model_name,
             "score_threshold": float(threshold),
-            "verification_model": self.verifier.model_path.name,
-            "verification_threshold": self.verifier.threshold,
+            "model_input_size": {
+                "height": self.input_size[0],
+                "width": self.input_size[1],
+                "source": "ONNX imgsz metadata/input tensor",
+            },
+            "model_metadata": {
+                key: self.model_metadata[key]
+                for key in ("task", "imgsz", "stride", "names", "version")
+                if key in self.model_metadata
+            },
             "nms_iou": {
                 "small": BEAD_NMS_SMALL_IOU,
                 "medium": BEAD_NMS_MEDIUM_IOU,
@@ -695,9 +380,7 @@ class AnalysisService:
     def preload_models(self) -> None:
         """Load every inference model once during application startup."""
         self._get_classifier()
-        bead_detector = self._get_beads()
-        if BEAD_FALSE_POSITIVE_VERIFICATION_ENABLED:
-            bead_detector.verifier._load()
+        self._get_beads()
 
     def _get_classifier(self) -> JewelryZeroShotClassifier:
         with self._model_lock:
@@ -726,7 +409,6 @@ class AnalysisService:
             if self._beads is None:
                 self._beads = OnnxBeadDetector(
                     PROJECT_ROOT / "models" / "detection" / "bead_finder.onnx",
-                    PROJECT_ROOT / "models" / "detection" / "beadcheck_mobilenet_v3.pt",
                     providers=self._onnx_providers(),
                 )
             return self._beads
@@ -1109,19 +791,25 @@ class AnalysisService:
         }
 
     def _run_beads(self, state: dict[str, Any], item: dict[str, Any] | None = None) -> dict[str, Any]:
-        # The detector was trained on the complete configured jewellery ROI at
-        # 640x640. A tight per-item crop changes bead scale and context and can
-        # also make the crop verifier reject otherwise valid detections. Run on
-        # that trained domain, then spatially assign detections to this item so
-        # multi-jewellery captures remain independent.
+        # Run on the complete configured jewellery ROI, letterboxed to the
+        # input size declared by the ONNX model. A tight per-item crop changes
+        # bead scale and context, so detections are spatially assigned afterward.
         input_path = state["paths"]["working"]
         image = cv2.imread(input_path)
         if image is None:
             raise RuntimeError("Could not load the captured jewellery image")
+        calibration = state.get("calibration") or {}
+        measurement_scale = None
+        if calibration.get("available") and calibration.get("found"):
+            measurement_scale = {
+                "mm_per_pixel_x": calibration.get("mm_per_pixel_x"),
+                "mm_per_pixel_y": calibration.get("mm_per_pixel_y"),
+            }
         result, annotated, onnx_annotated = self._get_beads().run(
             image,
             threshold=BEAD_DETECTION_SCORE_THRESHOLD,
             detection_region=(item or {}).get("bbox"),
+            measurement_scale=measurement_scale,
         )
         suffix = f"item_{int(item['index']):02d}" if item else "beads"
         path = self.repository.session_dir(state["id"]) / "results" / "beads" / f"{suffix}.png"
@@ -1200,27 +888,36 @@ class AnalysisService:
             fastsam_lock=None,
         )
         report = analysis["report"]
+        classification = state.get("classification") or {}
+        classified_items = classification.get("items") or []
+        jewel_count = int(classification.get("count") or len(classified_items) or 1)
+        estimate_weight = jewel_count == 1
         suffix = f"item_{int(item['index']):02d}" if item else "capture"
         output_dir = self.repository.session_dir(state["id"]) / "results" / "stones" / suffix
         output_dir.mkdir(parents=True, exist_ok=True)
         gallery_path = output_dir / "stones.png"
         cv2.imwrite(str(gallery_path), analysis["result_gallery_bgr"])
-        report_path = self._save_json(output_dir / "result.json", report)
+        report_path = self._save_json(
+            output_dir / "result.json",
+            report if estimate_weight else without_stone_weight_estimates(report),
+        )
         risk = report.get("stone_surface_risk") or {}
         measurements = report.get("stone_measurements") or {}
         stones_found = str(risk.get("level") or "NONE") != "NONE"
-        return {
+        result = {
             # Risk NONE includes calibrated sub-5 mm² regions suppressed as
             # likely reflections/texture rather than reported as real stones.
             "found": stones_found,
             "risk_level": str(risk.get("level") or "NONE"),
             "risk_status": str(risk.get("status") or "NO RISK - NO STONES DETECTED"),
             "stone_area_mm2": measurements.get("total_area_mm2") if stones_found else None,
-            **stone_weight_fields(measurements, stones_found),
             "measurement_basis": risk.get("basis"),
             "image": str(gallery_path),
             "report": report_path,
         }
+        if estimate_weight:
+            result.update(stone_weight_fields(measurements, stones_found))
+        return result
 
     def _run(self, capture_id: str) -> None:
         state = self.repository.get(capture_id)
@@ -1281,7 +978,8 @@ class AnalysisService:
                         result[key] = result_items[0][key]
             state = self.repository.get(capture_id) or state
             state["result"] = result
-            result["weights"] = weight_summary(state)
+            if len(result_items) == 1:
+                result["weights"] = weight_summary(state)
             if self.artifact_finalizer is not None:
                 self._update_job(
                     state,

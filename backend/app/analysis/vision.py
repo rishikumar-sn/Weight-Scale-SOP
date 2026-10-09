@@ -204,10 +204,23 @@ def build_jewellery_mask(image: np.ndarray, erase_mask: np.ndarray | None = None
     corners = [image[0, 0], image[0, -1], image[-1, 0], image[-1, -1]]
     preferred_white = float(np.mean([item.mean() for item in corners])) > 180
     masks = [_threshold(image, preferred_white), _threshold(image, not preferred_white)]
-    mask = max(masks, key=_score)
+    padded_erase: np.ndarray | None = None
     if erase_mask is not None and np.any(erase_mask):
-        padded = cv2.dilate((erase_mask > 0).astype(np.uint8), np.ones((25, 25), np.uint8), iterations=1)
-        mask[padded > 0] = 0
+        padded_erase = cv2.dilate(
+            (erase_mask > 0).astype(np.uint8),
+            np.ones((25, 25), np.uint8),
+            iterations=1,
+        )
+        # Score the same valid area that will be returned. A complex necklace
+        # can touch the testbed boundary and connect the useful adaptive mask
+        # to the platform outline. Scoring before removing that outline makes
+        # both candidates appear border-connected and can select the fallback
+        # mask that covers the entire gray platform.
+        for candidate in masks:
+            candidate[padded_erase > 0] = 0
+    mask = max(masks, key=_score)
+    if padded_erase is not None:
+        mask[padded_erase > 0] = 0
     mask = (mask > 0).astype(np.uint8)
     prepared = np.full_like(image, 255)
     prepared[mask > 0] = image[mask > 0]

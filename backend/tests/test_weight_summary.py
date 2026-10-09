@@ -1,6 +1,11 @@
 import pytest
 
-from backend.app.domain.weights import stone_weight_fields, weight_summary, weight_rows
+from backend.app.domain.weights import (
+    stone_weight_fields,
+    weight_summary,
+    weight_rows,
+    without_stone_weight_estimates,
+)
 
 
 def capture(average=1.7, gross=10.0, count=1):
@@ -24,7 +29,36 @@ def test_invalid_scale_cannot_produce_net(gross):
 
 
 def test_multiple_jewels_never_use_combined_gross_for_individual_net():
-    assert weight_summary(capture(count=2))["net_g"] is None
+    result = weight_summary(capture(count=2))
+    assert result["stone_g"] is None
+    assert result["net_g"] is None
+    assert "single-jewel" in result["note"]
+
+
+def test_multi_jewel_stone_report_keeps_analysis_but_removes_weight_estimates():
+    report = {
+        "stone_surface_risk": {"level": "HIGH"},
+        "stone_measurements": {
+            "success": True,
+            "total_area_mm2": 14.2,
+            "estimated_total_average_g": 1.4,
+            "estimated_total_average_ct": 7.0,
+            "physics_minimum_g": 1.1,
+            "weight_warnings": ["Estimated weight is uncertain."],
+            "instances": [{"area_mm2": 3.1, "estimated_weight_range_g": [0.1, 0.2]}],
+            "note": "Estimated average weight from face-up size only.",
+        },
+    }
+    cleaned = without_stone_weight_estimates(report)
+    measurements = cleaned["stone_measurements"]
+    assert cleaned["stone_surface_risk"] == {"level": "HIGH"}
+    assert measurements["total_area_mm2"] == 14.2
+    assert measurements["instances"] == [{"area_mm2": 3.1}]
+    assert not any(
+        "weight" in key or key.endswith(("_ct", "_g"))
+        for key in measurements
+    )
+    assert "note" not in measurements
 
 
 def test_missing_calibration_is_not_zero_stone_weight():

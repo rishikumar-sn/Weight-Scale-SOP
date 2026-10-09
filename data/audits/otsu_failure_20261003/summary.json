@@ -1,0 +1,29 @@
+{
+  "failure_session": "20261003_120006_b2866e53",
+  "root_cause": "Threshold candidates were scored before the testbed exclusion mask was applied. The complex necklace touched the platform outline, causing both candidates to be classified as border-connected and the full-platform fallback mask to win a tied score.",
+  "fix": "Apply the padded AprilTag/testbed exclusion region to every threshold candidate before scoring and retain the same exclusion on the selected mask.",
+  "failed_session_comparison": {
+    "old_jewellery_mask_pixels": 801186,
+    "fixed_jewellery_mask_pixels": 220976,
+    "old_item_count": 1,
+    "fixed_item_count": 1,
+    "old_stone_background_coverage_percent": 14.18,
+    "fixed_stone_coverage_percent": 0.29,
+    "large_background_regions_in_fixed_stone_output": 0
+  },
+  "regression": {
+    "sessions_tested": 24,
+    "pixel_exact_unchanged_sessions": 23,
+    "intentionally_changed_sessions": 1,
+    "sessions_preserving_item_count": 24
+  },
+  "automated_tests": {
+    "backend_tests_passed": 80,
+    "backend_tests_failed": 0
+  },
+  "evidence": {
+    "before_after": "failure_before_after.jpg",
+    "session_regression": "regression.json",
+    "fixed_stone_report": "fixed_result.json"
+  }
+}
