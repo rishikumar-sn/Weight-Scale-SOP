@@ -550,7 +550,7 @@ class ReportService:
 
         stones = (result.get("stones") or {}) if not result_items else {}
         if stones:
-            stone_lines = [str(stones.get("risk_status") or "NO RISK - NO STONES DETECTED")]
+            stone_lines = [str(stones.get("risk_status") or "No stones")]
             if stones.get("found"):
                 stone_lines.append("Detected stone regions are highlighted in green.")
             story.extend([Paragraph("Stone details", heading), Paragraph("<br/>".join(stone_lines), body)])

@@ -234,6 +234,69 @@ def test_mixed_items_receive_independent_routes(monkeypatch) -> None:
     assert confirmed["route"]["stones"] is True
 
 
+@pytest.mark.parametrize(
+    "labels",
+    [
+        ("Not Gold Jewelry",),
+        ("Bangle", "Not Gold Jewelry"),
+    ],
+)
+def test_not_gold_prediction_blocks_single_and_multi_item_analysis(monkeypatch, labels) -> None:
+    items = [
+        {"index": index, "predicted_label": item_label, "paths": {"working": f"{index}.png"}}
+        for index, item_label in enumerate(labels, start=1)
+    ]
+    repository = _Repository({"id": "capture-rejected", "classification": {"items": items}, "paths": {}})
+    service = AnalysisService(repository)
+    submitted: list[str] = []
+    monkeypatch.setattr(service._executor, "submit", lambda *_args, **_kwargs: submitted.append("started"))
+
+    with pytest.raises(RuntimeError, match="classified as Not Gold Jewelry"):
+        service.confirm_and_start(
+            "capture-rejected",
+            None,
+            False,
+            [
+                {"index": item["index"], "label": "Bangle", "learn": False}
+                for item in items
+            ],
+        )
+
+    assert submitted == []
+    assert repository.state["classification"]["items"] == items
+    service.shutdown()
+
+
+def test_not_gold_prediction_requires_corrected_label_and_explicit_override(monkeypatch) -> None:
+    item = {"index": 1, "predicted_label": "Not Gold Jewelry", "paths": {"working": "item.png"}}
+    repository = _Repository({"id": "capture-override", "classification": {"items": [item]}, "paths": {}})
+    service = AnalysisService(repository)
+    monkeypatch.setattr(service, "_save_classified_evidence", lambda *_args, **_kwargs: "evidence.jpg")
+    monkeypatch.setattr(service._executor, "submit", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(RuntimeError, match="confirmed as Not Gold Jewelry"):
+        service.confirm_and_start(
+            "capture-override",
+            None,
+            False,
+            [{"index": 1, "label": "Not Gold Jewelry", "learn": False}],
+            override_not_gold=True,
+        )
+
+    confirmed = service.confirm_and_start(
+        "capture-override",
+        None,
+        False,
+        [{"index": 1, "label": "Bangle", "learn": False}],
+        override_not_gold=True,
+    )
+
+    assert confirmed["status"] == "processing"
+    assert confirmed["classification"]["not_gold_override"] is True
+    assert confirmed["classification"]["confirmed_label"] == "Bangle"
+    service.shutdown()
+
+
 def test_each_bangle_and_earring_is_analyzed_independently(monkeypatch) -> None:
     items = []
     for index, label in enumerate(("Bangle", "Bangle", "Earring", "Earring"), start=1):
@@ -281,3 +344,73 @@ def test_each_bangle_and_earring_is_analyzed_independently(monkeypatch) -> None:
     assert [item["status"] for item in repository.state["result"]["items"]] == [
         "complete", "complete", "complete", "complete"
     ]
+
+
+@pytest.mark.parametrize("selected_label", ["Not Gold Jewelry", "Necklace"])
+def test_recapture_saves_corrections_without_starting_analysis(monkeypatch, selected_label) -> None:
+    item = {"index": 1, "predicted_label": "Bangle", "paths": {"working": "old-item.png"}}
+    repository = _Repository({
+        "id": "recapture", "status": "awaiting_confirmation",
+        "classification": {"items": [item]}, "paths": {},
+    })
+    service = AnalysisService(repository)
+    learned = []
+    classifier = type("Classifier", (), {
+        "learn_correction": lambda _self, path, label: learned.append((path, label)),
+    })()
+    monkeypatch.setattr(service, "_get_classifier", lambda: classifier)
+    monkeypatch.setattr(service._executor, "submit", lambda *_args, **_kwargs: pytest.fail("Analysis must not start"))
+    for _ in range(2):
+        saved = service.confirm_and_start(
+            "recapture", None, False,
+            [{"index": 1, "label": selected_label, "learn": True}], save_only=True,
+        )
+    assert learned == [("old-item.png", selected_label)]
+    assert saved["status"] == "awaiting_confirmation"
+    assert saved["classification"]["items"][0]["correction_label"] == selected_label
+    assert not saved["classification"].get("confirmed")
+    service.shutdown()
+
+
+def test_confirm_saves_manual_correction_for_gallery(monkeypatch) -> None:
+    repository = _Repository({
+        "id": "confirm-gallery", "status": "awaiting_confirmation", "paths": {},
+        "classification": {"items": [
+            {"index": 1, "predicted_label": "Bangle", "paths": {"working": "item.png"}},
+        ]},
+    })
+    service = AnalysisService(repository)
+    learned = []
+    classifier = type("Classifier", (), {
+        "learn_correction": lambda _self, path, label: learned.append((path, label)),
+    })()
+    monkeypatch.setattr(service, "_get_classifier", lambda: classifier)
+    monkeypatch.setattr(service, "_save_classified_evidence", lambda *_args, **_kwargs: "evidence.jpg")
+    monkeypatch.setattr(service._executor, "submit", lambda *_args, **_kwargs: None)
+    confirmed = service.confirm_and_start(
+        "confirm-gallery", None, False,
+        [{"index": 1, "label": "Necklace", "learn": True}],
+    )
+    assert learned == [("item.png", "Necklace")]
+    assert confirmed["status"] == "processing"
+    service.shutdown()
+
+
+@pytest.mark.parametrize("indices", [(1, 1), (1, 3)])
+def test_recapture_validates_all_indices_before_learning(monkeypatch, indices) -> None:
+    repository = _Repository({
+        "id": "invalid", "status": "awaiting_confirmation", "paths": {},
+        "classification": {"items": [
+            {"index": index, "predicted_label": "Bangle", "paths": {"working": f"{index}.png"}}
+            for index in (1, 2)
+        ]},
+    })
+    service = AnalysisService(repository)
+    monkeypatch.setattr(service, "_get_classifier", lambda: pytest.fail("Invalid input must not teach gallery"))
+    with pytest.raises(RuntimeError, match="every detected jewel"):
+        service.confirm_and_start(
+            "invalid", None, False,
+            [{"index": index, "label": "Not Gold Jewelry", "learn": True} for index in indices],
+            save_only=True,
+        )
+    service.shutdown()

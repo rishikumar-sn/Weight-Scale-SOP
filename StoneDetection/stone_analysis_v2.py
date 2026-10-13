@@ -1381,34 +1381,34 @@ def calculate_stone_surface_risk(
     suppressed_as_noise = False
     small_jewellery_relative_risk = False
     if count <= 0 or coverage <= 0.0:
-        level, status = "NONE", "NO RISK - NO STONES DETECTED"
+        level, status = "NONE", "No stones"
     elif calibrated_area is not None:
         if calibrated_area > float(high_area_threshold_mm2):
-            level, status = "HIGH", "HIGH RISK - LARGE STONE AREA DETECTED"
+            level, status = "HIGH", "High stones region"
         elif calibrated_area >= float(medium_area_threshold_mm2):
-            level, status = "MEDIUM", "MEDIUM RISK - STONES DETECTED"
+            level, status = "MEDIUM", "Medium stones"
         elif calibrated_area >= float(low_area_threshold_mm2):
-            level, status = "LOW", "LOW RISK - SMALL STONE AREA DETECTED"
+            level, status = "LOW", "Low stones"
         elif jewellery_area is not None and jewellery_area <= float(small_jewellery_max_area_mm2):
             small_jewellery_relative_risk = True
             if coverage >= float(high_threshold):
-                level, status = "HIGH", "HIGH RISK - LARGE STONE FOOTPRINT DETECTED"
+                level, status = "HIGH", "High stones region"
             elif coverage >= float(moderate_threshold):
-                level, status = "MEDIUM", "MEDIUM RISK - STONES DETECTED"
+                level, status = "MEDIUM", "Medium stones"
             elif coverage >= float(low_threshold):
-                level, status = "LOW", "LOW RISK - SMALL STONE AREA DETECTED"
+                level, status = "LOW", "Low stones"
             else:
-                level, status = "NONE", "NO RISK - NO STONES DETECTED"
+                level, status = "NONE", "No stones"
                 suppressed_as_noise = True
         else:
-            level, status = "NONE", "NO RISK - NO STONES DETECTED"
+            level, status = "NONE", "No stones"
             suppressed_as_noise = True
     elif coverage >= float(high_threshold) or count >= STONE_HIGH_REGION_COUNT:
-        level, status = "HIGH", "HIGH RISK - MORE STONE REGIONS DETECTED"
+        level, status = "HIGH", "High stones region"
     elif coverage >= float(low_threshold):
-        level, status = "MEDIUM", "MEDIUM RISK - STONES DETECTED"
+        level, status = "MEDIUM", "Medium stones"
     else:
-        level, status = "LOW", "LOW RISK - SMALL STONE AREA DETECTED"
+        level, status = "LOW", "Low stones"
     return {
         "level": level,
         "status": status,

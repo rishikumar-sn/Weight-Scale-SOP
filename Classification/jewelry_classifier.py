@@ -18,6 +18,8 @@ DEFAULT_ONNX_MODEL = "siglip2-base-patch32-256_vision_encoder.sim.onnx"
 DEFAULT_PROMPT_FILE = "jewelry_prompts.json"
 DEFAULT_CACHE_FILE = "jewelry_text_embeddings_cache.npz"
 DEFAULT_GALLERY_FILE = "jewelry_correction_gallery.npz"
+DEFAULT_FOREIGN_PROMPT_FILE = "foreign_object_prompts.json"
+DEFAULT_FOREIGN_CACHE_FILE = "foreign_object_text_embeddings_cache.npz"
 GALLERY_THRESHOLD = 0.90
 GALLERY_EXACT_MATCH_THRESHOLD = 0.975
 GALLERY_DISAGREEMENT_MARGIN = 0.01
@@ -320,6 +322,63 @@ class JewelryZeroShotClassifier:
         }
         self.group_to_class_indices = self._build_group_to_class_indices()
         self.gallery = CorrectionGallery(self.gallery_path)
+        self._load_foreign_object_embeddings()
+
+    def _load_foreign_object_embeddings(self) -> None:
+        """Keep narrow foreign-object evidence separate from jewellery scores."""
+        prompt_path = self.base_dir / DEFAULT_FOREIGN_PROMPT_FILE
+        config = json.loads(prompt_path.read_text(encoding="utf-8"))
+        self.foreign_object_definitions = config["objects"]
+        payload = json.dumps(
+            {"config": config, "model": self.text_model_id,
+             "expansion": PROMPT_EXPANSION_VERSION,
+             "object_names": list(self.foreign_object_definitions)},
+            sort_keys=True,
+        )
+        fingerprint = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        cache_path = self.base_dir / DEFAULT_FOREIGN_CACHE_FILE
+        if cache_path.exists():
+            with np.load(cache_path, allow_pickle=False) as cache:
+                if str(cache["prompt_hash"].item()) == fingerprint:
+                    self.foreign_object_embeddings = cache["embeddings"].astype(np.float32)
+                    return
+        model = self._load_text_model()
+        model.eval()
+        with torch.no_grad():
+            self.foreign_object_embeddings = np.stack([
+                self._encode_prompt_set(model, entry["prompts"])
+                for entry in self.foreign_object_definitions.values()
+            ])
+        np.savez_compressed(
+            cache_path, embeddings=self.foreign_object_embeddings,
+            prompt_hash=np.array(fingerprint),
+        )
+
+    def _has_specific_foreign_object_evidence(
+        self, image_embedding: np.ndarray,
+    ) -> tuple[bool, str]:
+        vectors = getattr(self, "foreign_object_embeddings", None)
+        if vectors is None:
+            return False, "no specific foreign-object evidence"
+        embedding = image_embedding.flatten()
+        similarities = embedding @ vectors.T
+        jewellery_similarity = float(np.max(embedding @ self.text_embeddings.T))
+        gold_similarity = self._group_similarity(embedding, "gold_verification")
+        for (name, entry), similarity in zip(
+            self.foreign_object_definitions.items(), similarities, strict=True,
+        ):
+            margin = float(similarity) - jewellery_similarity
+            if (
+                float(similarity) >= entry["min_similarity"]
+                and margin >= entry["min_margin"]
+                and gold_similarity < entry["max_gold_similarity"]
+            ):
+                return True, (
+                    f"specific non-jewellery evidence: {name} "
+                    f"(object={similarity:.3f}, jewellery={jewellery_similarity:.3f}, "
+                    f"margin={margin:.3f}, gold={gold_similarity:.3f})"
+                )
+        return False, "no specific foreign-object evidence"
 
     def learn_correction(self, image_path: str | Path, label: str) -> None:
         path = Path(image_path)
@@ -668,6 +727,11 @@ class JewelryZeroShotClassifier:
         image_embedding: np.ndarray,
     ) -> tuple[bool, str]:
         """Return only high-precision rejection evidence for foreign objects."""
+        specific_foreign, specific_reason = self._has_specific_foreign_object_evidence(
+            image_embedding
+        )
+        if specific_foreign:
+            return True, specific_reason
         gold_sim, non_gold_sim, negative_sim = self._gold_verification_scores(
             image_embedding
         )

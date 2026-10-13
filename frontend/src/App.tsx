@@ -72,6 +72,7 @@ export default function App() {
     apriltag: null,
   });
   const [itemCorrections, setItemCorrections] = useState<Record<number, string>>({});
+  const [notGoldOverride, setNotGoldOverride] = useState(false);
   const [captureTab, setCaptureTab] = useState<CaptureTab>("jewellery");
   const [tareMode, setTareMode] = useState<TareMode>("pledge");
   const [tareCaptures, setTareCaptures] = useState<Partial<Record<TareMode, CaptureState>>>({});
@@ -310,6 +311,7 @@ export default function App() {
       setItemCorrections(Object.fromEntries(
         (classified.classification.items || []).map((item: any) => [item.index, item.predicted_label]),
       ));
+      setNotGoldOverride(false);
       setMessage(`Detected ${classified.classification.count || 0} jewel(s). Please confirm each item type.`);
     } catch (reason: any) {
       setError(reason.message);
@@ -338,26 +340,45 @@ export default function App() {
     }
   }
 
+  function classificationPayload() {
+    return {
+      override_not_gold: notGoldOverride,
+      items: (active?.classification?.items || []).map((item: any) => ({
+        index: item.index,
+        label: itemCorrections[item.index] || item.predicted_label,
+        learn: (itemCorrections[item.index] || item.predicted_label) !== item.predicted_label,
+      })),
+    };
+  }
+
   async function recapture() {
-    setItemCorrections({});
-    await capture();
+    setBusy(true);
+    setError("");
+    try {
+      if (active?.status === "awaiting_confirmation") {
+        setMessage("Saving manual corrections for gallery matching...");
+        await requestJson(`/api/captures/${active.id}/corrections`, {
+          method: "POST",
+          body: JSON.stringify(classificationPayload()),
+        });
+      }
+      await capture();
+    } catch (reason: any) {
+      setError(reason.message);
+      setMessage("Corrections could not be saved. Please retry recapture.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function confirmItems() {
     if (!active) return;
-    const items = active.classification?.items || [];
     setBusy(true);
     setError("");
     try {
       const next = await requestJson(`/api/captures/${active.id}/confirm`, {
         method: "POST",
-        body: JSON.stringify({
-          items: items.map((item: any) => ({
-            index: item.index,
-            label: itemCorrections[item.index] || item.predicted_label,
-            learn: (itemCorrections[item.index] || item.predicted_label) !== item.predicted_label,
-          })),
-        }),
+        body: JSON.stringify(classificationPayload()),
       });
       setActive(next);
       setMessage("Every detected jewel is being checked separately.");
@@ -371,6 +392,7 @@ export default function App() {
   function startNew() {
     setActive(null);
     setItemCorrections({});
+    setNotGoldOverride(false);
     setError("");
     setMessage("Place the next jewellery item and check the weight.");
   }
@@ -384,12 +406,20 @@ export default function App() {
     return "capture";
   }, [active]);
 
-  const predicted = active?.classification?.predicted_label || "";
-  const isNotGold = predicted.trim().toLowerCase() === "not gold jewelry";
   const weight = live.scale?.weight_g;
   const result = active?.result || {};
   const media = active?.media || {};
   const detectedItems = active?.classification?.items || [];
+  const predictedNotGoldItems = detectedItems.filter(
+    (item: any) => String(item.predicted_label || "").trim().toLowerCase() === "not gold jewelry",
+  );
+  const selectedNotGoldItems = detectedItems.filter(
+    (item: any) => String(itemCorrections[item.index] || item.predicted_label || "").trim().toLowerCase() === "not gold jewelry",
+  );
+  const hasNotGoldPrediction = predictedNotGoldItems.length > 0;
+  const canConfirmItems = detectedItems.length > 0
+    && selectedNotGoldItems.length === 0
+    && (!hasNotGoldPrediction || notGoldOverride);
   const tareCapture = tareCaptures[tareMode];
   const cameraReady = Boolean(
     live.camera?.connected
@@ -528,7 +558,7 @@ export default function App() {
             {captureTab === "jewellery" && stage === "confirm" && (
               <div className="confirmationView">
                 <span className="eyebrow">{detectedItems.length} jewel{detectedItems.length === 1 ? "" : "s"} identified</span>
-                <h2>{isNotGold ? "Not a gold jewel" : "Confirm each jewel type"}</h2>
+                <h2>{hasNotGoldPrediction ? "Non-gold object detected" : "Confirm each jewel type"}</h2>
                 <div className="confirmationContent">
                   <ResultImage src={media.evidence} alt="Captured jewellery" label="Captured evidence" />
                   <div className="confirmationPanel">
@@ -555,6 +585,25 @@ export default function App() {
                         </div>
                       ))}
                     </div>
+                    {hasNotGoldPrediction && (
+                      <div className="notGoldGate" role="alert">
+                        <strong>Analysis is blocked</strong>
+                        <p>
+                          {predictedNotGoldItems.length === 1
+                            ? `Jewel ${predictedNotGoldItems[0].index} was classified as Not Gold Jewelry.`
+                            : `Jewels ${predictedNotGoldItems.map((item: any) => item.index).join(", ")} were classified as Not Gold Jewelry.`}
+                          {" "}Recapture after removing the object. If this classification is wrong, select the correct gold jewellery type above and acknowledge the override.
+                        </p>
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={notGoldOverride}
+                            onChange={(event) => setNotGoldOverride(event.target.checked)}
+                          />
+                          I confirm the flagged object is gold jewellery and want to override the classification.
+                        </label>
+                      </div>
+                    )}
                     <div className="confirmationActions">
                       <button
                         className="secondary"
@@ -563,9 +612,15 @@ export default function App() {
                       >
                         {busy ? "Please wait..." : "Recapture image"}
                       </button>
-                      <button className="primary" onClick={confirmItems} disabled={busy || !detectedItems.length}>Confirm all and analyze</button>
+                      <button className="primary" onClick={confirmItems} disabled={busy || !canConfirmItems}>
+                        {hasNotGoldPrediction ? "Confirm override and analyze" : "Confirm all and analyze"}
+                      </button>
                     </div>
-                    <p className="confirmationHint">Review every detected jewel before starting the detailed analysis.</p>
+                    <p className="confirmationHint">
+                      {selectedNotGoldItems.length
+                        ? "Not Gold Jewelry cannot proceed to analysis. Recapture saves your manual corrections for gallery matching, then takes a new image."
+                        : "Review every detected jewel before starting the detailed analysis."}
+                    </p>
                   </div>
                 </div>
               </div>
@@ -632,7 +687,7 @@ export default function App() {
                           {item.beads && <div><span>Bead count</span><strong>{item.beads.count ?? item.beads.detections?.length ?? "Unavailable"}</strong></div>}
                           {item.beads?.summary && <div className="wide"><span>Bead insights</span><strong>{item.beads.summary}</strong></div>}
                           {item.stones?.stone_area_mm2 != null && <div><span>Detected stone area</span><strong>{Number(item.stones.stone_area_mm2).toFixed(2)} mm²</strong></div>}
-                          {item.stones && <div className={`wide riskTag risk${item.stones.risk_level || "NONE"}`}><span>Stone analysis</span><strong>{item.stones.risk_status}</strong></div>}
+                          {item.stones && <div className={`wide riskTag risk${item.stones.risk_level || "NONE"}`}><span>Stone analysis</span><strong>{({ HIGH: "High stones region", MEDIUM: "Medium stones", LOW: "Low stones", NONE: "No stones" } as Record<string, string>)[item.stones.risk_level || "NONE"] || "No stones"}</strong></div>}
                         </div>
                         {(item.errors || []).map((warning: any) => <p className="itemWarning" key={warning.stage}>{warning.stage}: {warning.message}</p>)}
                         <div className="resultGallery">

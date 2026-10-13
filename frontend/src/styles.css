@@ -120,6 +120,11 @@ h1 { font-family: Georgia, "Times New Roman", serif; font-size: 25px; }
 .confirmationPanel .detectedItemList { margin-top: 0; }
 .confirmationActions { display: grid; grid-template-columns: minmax(140px, .8fr) minmax(190px, 1.2fr); gap: 10px; }
 .confirmationHint { margin: 10px 6px 0; color: var(--muted); font-size: 11px; line-height: 1.45; text-align: center; }
+.notGoldGate { margin: 12px 0; padding: 12px; border: 1px solid #d89519; border-radius: 12px; background: #fff8e8; color: var(--ink); }
+.notGoldGate > strong { color: var(--red); }
+.notGoldGate p { margin: 6px 0 10px; font-size: 12px; line-height: 1.5; }
+.notGoldGate label { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; font-weight: 700; line-height: 1.4; cursor: pointer; }
+.notGoldGate input { width: 16px; height: 16px; margin-top: 1px; flex: 0 0 auto; }
 .jewelleryTypeNote { margin: 8px 2px 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
 select { width: 100%; height: 46px; padding: 0 12px; border: 1px solid var(--line); border-radius: 10px; background: white; color: var(--ink); margin-bottom: 10px; }
 .progressView { text-align: center; padding-top: 15px; }

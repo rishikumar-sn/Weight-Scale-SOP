@@ -2,8 +2,41 @@ from __future__ import annotations
 
 import numpy as np
 from PIL import Image
+import pytest
 
 from Classification.jewelry_classifier import GallerySearchResult, JewelryZeroShotClassifier
+
+
+@pytest.mark.parametrize("object_name", ["rubber_band", "pin_header"])
+def test_specific_foreign_evidence_rejects_even_when_broad_gate_passes(object_name) -> None:
+    classifier = JewelryZeroShotClassifier.__new__(JewelryZeroShotClassifier)
+    classifier.text_embeddings = np.array([[0.08]], dtype=np.float32)
+    classifier.foreign_object_embeddings = np.array([[0.13]], dtype=np.float32)
+    classifier.foreign_object_definitions = {
+        object_name: {"min_similarity": 0.1, "min_margin": 0.01,
+                      "max_gold_similarity": 0.06}
+    }
+    classifier._group_similarity = lambda *_args: 0.05
+    classifier._gold_verification_scores = lambda _embedding: (0.05, 0.07, 0.06)
+    rejected, reason = classifier._has_strong_non_jewelry_evidence(np.array([1.0]))
+    assert rejected
+    assert object_name in reason
+
+
+@pytest.mark.parametrize("jewellery_similarity,gold_similarity", [(0.125, 0.05), (0.08, 0.07)])
+def test_specific_foreign_guard_retains_competing_jewellery_evidence(
+    jewellery_similarity, gold_similarity,
+) -> None:
+    classifier = JewelryZeroShotClassifier.__new__(JewelryZeroShotClassifier)
+    classifier.text_embeddings = np.array([[jewellery_similarity]], dtype=np.float32)
+    classifier.foreign_object_embeddings = np.array([[0.13]], dtype=np.float32)
+    classifier.foreign_object_definitions = {
+        "rubber_band": {"min_similarity": 0.1, "min_margin": 0.01,
+                        "max_gold_similarity": 0.06}
+    }
+    classifier._group_similarity = lambda *_args: gold_similarity
+    rejected, _ = classifier._has_specific_foreign_object_evidence(np.array([1.0]))
+    assert not rejected
 
 
 def test_thin_jewellery_crop_is_not_treated_as_empty() -> None:

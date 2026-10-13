@@ -41,3 +41,13 @@ data/ring-validation/
 Thumbs.db
 /new_classification
 /chain_datasets
+
+# Standalone development process lab (shared separately from the production app)
+/process_testbench/
+
+# Local datasets, generated audit output, and isolated development experiments
+/data/datasets/
+/data/audits/
+/experiments/
+
+# Generated cache; keep foreign_object_prompts.json because the classifier loads it

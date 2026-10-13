@@ -255,6 +255,17 @@ def check_item_type(capture_id: str):
 
 @app.post("/api/captures/{capture_id}/confirm")
 def confirm_item_type(capture_id: str, payload: ClassificationConfirmation):
+    return _confirm_item_type(capture_id, payload)
+
+
+@app.post("/api/captures/{capture_id}/corrections")
+def save_item_corrections(capture_id: str, payload: ClassificationConfirmation):
+    return _confirm_item_type(capture_id, payload, save_only=True)
+
+
+def _confirm_item_type(
+    capture_id: str, payload: ClassificationConfirmation, *, save_only: bool = False,
+):
     allowed_labels = class_labels(
         PROJECT_ROOT / "Classification" / "jewelry_prompts.json"
     )
@@ -269,6 +280,8 @@ def confirm_item_type(capture_id: str, payload: ClassificationConfirmation):
             payload.label,
             payload.learn,
             [item.model_dump() for item in payload.items] if payload.items else None,
+            override_not_gold=payload.override_not_gold,
+            save_only=save_only,
         ))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Capture not found") from exc

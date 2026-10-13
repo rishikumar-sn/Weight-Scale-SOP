@@ -26,6 +26,7 @@ class ItemClassificationConfirmation(BaseModel):
 class ClassificationConfirmation(BaseModel):
     label: str | None = Field(default=None, min_length=1, max_length=120)
     learn: bool = False
+    override_not_gold: bool = False
     items: list[ItemClassificationConfirmation] | None = None
 
 

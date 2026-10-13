@@ -4880,7 +4880,7 @@ def analyze_jewel_candidate(
             "detected_colors": jewel_report["detected_colors"],
             "learned_representations": jewel_report["learned_representations"],
             "reflection": jewel_report["reflection"],
-            "stone_status": "NO RISK - NO STONES DETECTED",
+            "stone_status": "No stones",
             "masked_bgra": masked_png,
             "overlay_bgr": overlay_png,
             "color_mask_bgr": color_mask_png,
@@ -5440,12 +5440,12 @@ def analyze_jewel_candidate(
         local_high = local_has_stones and float(jewel_report.get("stone_percentage", 0.0)) >= 20.0
         local_stone_risk = {
             "status": (
-                "HIGH RISK - MORE STONE REGIONS DETECTED"
+                "High stones region"
                 if local_high
                 else (
-                    "MEDIUM RISK - STONES DETECTED"
+                    "Medium stones"
                     if local_has_stones
-                    else "NO RISK - NO STONES DETECTED"
+                    else "No stones"
                 )
             )
         }
@@ -5690,12 +5690,12 @@ def analyze_image_bgr(
         report["stone_surface_risk"] = {
             "level": "HIGH" if fallback_high else ("MEDIUM" if fallback_has_stones else "NONE"),
             "status": (
-                "HIGH RISK - MORE STONE REGIONS DETECTED"
+                "High stones region"
                 if fallback_high
                 else (
-                    "MEDIUM RISK - STONES DETECTED"
+                    "Medium stones"
                     if fallback_has_stones
-                    else "NO RISK - NO STONES DETECTED"
+                    else "No stones"
                 )
             ),
             "stone_surface_coverage_percent": report["stone_percentage"],

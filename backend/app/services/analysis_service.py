@@ -542,6 +542,8 @@ class AnalysisService:
         label: str | None,
         learn: bool,
         item_confirmations: list[dict[str, Any]] | None = None,
+        override_not_gold: bool = False,
+        save_only: bool = False,
     ) -> dict[str, Any]:
         state = self.repository.get(capture_id)
         if not state:
@@ -551,13 +553,18 @@ class AnalysisService:
         if not classified_items:
             raise RuntimeError("Check the item type before confirming it")
 
+        if save_only and state.get("status") != "awaiting_confirmation":
+            raise RuntimeError("Corrections can only be saved while awaiting confirmation")
+
         confirmations_by_index = {
             int(item["index"]): item for item in (item_confirmations or [])
         }
-        if item_confirmations and len(confirmations_by_index) != len(classified_items):
+        if item_confirmations and (
+            len(item_confirmations) != len(classified_items)
+            or set(confirmations_by_index) != {int(item["index"]) for item in classified_items}
+        ):
             raise RuntimeError("Confirm one item type for every detected jewel")
-        confirmed_labels: list[str] = []
-        routes: list[dict[str, Any]] = []
+        pending_confirmations: list[tuple[dict[str, Any], str, bool, dict[str, Any]]] = []
         for item in classified_items:
             confirmation = confirmations_by_index.get(int(item["index"]))
             confirmed_label = str(
@@ -569,20 +576,65 @@ class AnalysisService:
             if not confirmed_label:
                 raise RuntimeError(f"Choose an item type for jewel {item['index']}")
             should_learn = bool((confirmation or {}).get("learn", learn))
-            if should_learn and confirmed_label != item.get("predicted_label"):
+            pending_confirmations.append(
+                (item, confirmed_label, should_learn, route_for_label(confirmed_label))
+            )
+
+        rejected_predictions = [
+            int(item["index"])
+            for item in classified_items
+            if route_for_label(str(item.get("predicted_label") or ""))["key"] == "no_analysis"
+        ]
+        rejected_confirmations = [
+            int(item["index"])
+            for item, confirmed_label, _should_learn, _route in pending_confirmations
+            if route_for_label(confirmed_label)["key"] == "no_analysis"
+        ]
+        if rejected_confirmations and not save_only:
+            jewels = ", ".join(str(index) for index in rejected_confirmations)
+            raise RuntimeError(
+                f"Jewel(s) {jewels} are confirmed as Not Gold Jewelry. "
+                "Recapture, or select the correct gold jewellery type before confirming an override."
+            )
+        if rejected_predictions and not override_not_gold and not save_only:
+            jewels = ", ".join(str(index) for index in rejected_predictions)
+            raise RuntimeError(
+                f"Jewel(s) {jewels} were classified as Not Gold Jewelry. "
+                "Detailed analysis is blocked; recapture, or explicitly confirm an operator override."
+            )
+
+        confirmed_labels: list[str] = []
+        routes: list[dict[str, Any]] = []
+        for item, confirmed_label, should_learn, item_route in pending_confirmations:
+            if (
+                should_learn
+                and confirmed_label != item.get("predicted_label")
+                and confirmed_label != item.get("gallery_saved_label")
+            ):
                 self._get_classifier().learn_correction(item["paths"]["working"], confirmed_label)
+                item["gallery_saved_label"] = confirmed_label
+            if save_only:
+                item["correction_label"] = confirmed_label
+                continue
             item["confirmed_label"] = confirmed_label
             item["confirmed"] = True
             item["learned"] = should_learn
-            item["route"] = route_for_label(confirmed_label)
+            item["route"] = item_route
             confirmed_labels.append(confirmed_label)
             routes.append(item["route"])
+
+        if save_only:
+            state["classification"] = classification
+            state["updated_at"] = self._now()
+            self.repository.save(state)
+            return state
 
         classification["items"] = classified_items
         classification["confirmed_label"] = ", ".join(confirmed_labels)
         classification["confirmed_labels"] = confirmed_labels
         classification["labels"] = confirmed_labels
         classification["confirmed"] = True
+        classification["not_gold_override"] = bool(rejected_predictions)
         classification["count"] = len(classified_items)
         state["classification"] = classification
         state["route"] = {
@@ -909,7 +961,7 @@ class AnalysisService:
             # likely reflections/texture rather than reported as real stones.
             "found": stones_found,
             "risk_level": str(risk.get("level") or "NONE"),
-            "risk_status": str(risk.get("status") or "NO RISK - NO STONES DETECTED"),
+            "risk_status": str(risk.get("status") or "No stones"),
             "stone_area_mm2": measurements.get("total_area_mm2") if stones_found else None,
             "measurement_basis": risk.get("basis"),
             "image": str(gallery_path),
