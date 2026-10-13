@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import numpy as np
 from PIL import Image
 import pytest
@@ -7,7 +10,27 @@ import pytest
 from Classification.jewelry_classifier import GallerySearchResult, JewelryZeroShotClassifier
 
 
-@pytest.mark.parametrize("object_name", ["rubber_band", "pin_header"])
+@pytest.mark.parametrize("battery,jewellery,gold,expected", [
+    (0.151, 0.069, 0.054, True),  # Natural battery face.
+    (0.118, 0.083, 0.041, True),  # Weakest reviewed raw battery capture.
+    (0.101, 0.084, 0.046, False),  # Masked face loses battery evidence.
+    (0.151, 0.130, 0.054, False),  # Competing jewellery must be retained.
+    (0.151, 0.069, 0.070, False),  # Strong gold evidence must be retained.
+])
+def test_production_button_battery_thresholds(battery, jewellery, gold, expected) -> None:
+    classifier = JewelryZeroShotClassifier.__new__(JewelryZeroShotClassifier)
+    config = Path(__file__).resolve().parents[2] / "Classification/foreign_object_prompts.json"
+    classifier.foreign_object_definitions = {
+        "button_battery": json.loads(config.read_text(encoding="utf-8"))["objects"]["button_battery"]
+    }
+    classifier.text_embeddings = np.array([[jewellery]], dtype=np.float32)
+    classifier.foreign_object_embeddings = np.array([[battery]], dtype=np.float32)
+    classifier._group_similarity = lambda *_args: gold
+    rejected, _ = classifier._has_specific_foreign_object_evidence(np.array([1.0]))
+    assert rejected is expected
+
+
+@pytest.mark.parametrize("object_name", ["rubber_band", "pin_header", "button_battery"])
 def test_specific_foreign_evidence_rejects_even_when_broad_gate_passes(object_name) -> None:
     classifier = JewelryZeroShotClassifier.__new__(JewelryZeroShotClassifier)
     classifier.text_embeddings = np.array([[0.08]], dtype=np.float32)

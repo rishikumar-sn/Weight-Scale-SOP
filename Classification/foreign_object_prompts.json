@@ -1,5 +1,16 @@
 {
   "objects": {
+    "button_battery": {
+      "prompts": [
+        "a silver lithium coin cell battery with a flat solid circular metal face",
+        "a small round silver button cell battery, an electronic battery not jewelry",
+        "the flat round underside of a button battery with a textured metal surface",
+        "a CR2032 or CR2025 coin battery with a metal rim and no finger hole"
+      ],
+      "min_similarity": 0.11,
+      "min_margin": 0.03,
+      "max_gold_similarity": 0.06
+    },
     "rubber_band": {
       "prompts": [
         "a rubber band elastic loop made of rubber",

@@ -189,6 +189,20 @@ python scripts/reference_pipeline_smoke.py "D:\path\to\runtime_sessions\session_
 
 ## Jewellery classifier calibration
 
+Button/coin batteries are checked through dedicated foreign-object text prompts
+on the natural camera crop before segmentation. A rejection requires similarity
+of at least 0.11, a margin of at least 0.03 over every jewellery class, and gold
+similarity below 0.06. This check does not use the correction gallery. Keep the
+raw crop check: isolated masks can remove the solid battery face and resemble
+a finger ring. Broad silver colour or a missing ring hole alone is insufficient
+to reject jewellery.
+
+Replay battery checks and inspect individual ring prompt similarities with
+`python scripts/evaluate_button_battery.py`. Reports go to
+`data/audits/battery_cell_20261013/`; sessions and corrections are not modified.
+The eight reviewed battery captures are views of one test object; broader
+reliability still needs independent batteries and jewellery samples.
+
 Production choices are intentionally limited to Bangle, Bracelet, Chain / Necklace,
 Mattal, Earrings / Nosepin, Finger Ring, Other Gold Jewellery, and Not Gold Jewelry.
 Legacy labels are canonicalized when the correction gallery is loaded.
