@@ -5139,6 +5139,12 @@ def analyze_jewel_candidate(
                     hsv_image=color_measurement_hsv,
                 )
                 color = str(classification["color"])
+                if _stone_v2.is_warm_metal_shadow(color, raw_zoomed_bgr, mask):
+                    _stone_v2_diagnostics.setdefault("color_rejections", []).append({
+                        "candidate_id": region.get("candidate_id"),
+                        "reason": "warm_metal_shadow",
+                    })
+                    continue
                 refined_gold_share = float(
                     (region.get("refinement_diagnostics") or {}).get(
                         "gold_overlap",

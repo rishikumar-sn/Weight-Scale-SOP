@@ -35,6 +35,7 @@ for module_path in (
 
 from Classification.jewelry_classifier import JewelryZeroShotClassifier  # noqa: E402
 from Dimension.bangle_detector import detect_bangle  # noqa: E402
+from Dimension.finger_ring_detector import RingDimensionsUnavailable  # noqa: E402
 import StoneDetection.jewel_gem_hsv_report as stone_detection  # noqa: E402
 
 
@@ -817,22 +818,42 @@ class AnalysisService:
 
     def _run_dimension(self, state: dict[str, Any], item: dict[str, Any] | None = None) -> dict[str, Any]:
         calibration = state.get("calibration") or {}
-        mm_per_pixel = _apriltag_scale_mm_per_pixel(calibration)
         paths = (item or {}).get("paths") or state["paths"]
         label = str((item or {}).get("confirmed_label") or state["classification"]["confirmed_label"])
         suffix = f"item_{int(item['index']):02d}" if item else "dimensions"
-        result = detect_bangle(
-            paths["working"],
-            scale=mm_per_pixel,
-            debug=False,
-            jewel_type=label,
-        )
+
+        def unavailable(reason: str) -> dict[str, Any]:
+            return {
+                "applicable": False,
+                "status": "unavailable",
+                "reason": reason,
+                "outer_diameter_mm": None,
+                "inner_diameter_mm": None,
+                "thickness_mm": None,
+                "image": paths["working"],
+            }
+
+        if label == "Finger Ring" and not (calibration.get("available") and calibration.get("found")):
+            return unavailable("AprilTag calibration is unavailable. Keep the complete tag visible and capture again for dimensions.")
+        mm_per_pixel = _apriltag_scale_mm_per_pixel(calibration)
+        try:
+            result = detect_bangle(
+                paths["working"],
+                scale=mm_per_pixel,
+                debug=False,
+                jewel_type=label,
+            )
+        except RingDimensionsUnavailable as exc:
+            if label != "Finger Ring":
+                raise
+            return unavailable(str(exc))
         output = self.repository.session_dir(state["id"]) / "results" / "dimensions" / f"{suffix}.png"
         output.parent.mkdir(parents=True, exist_ok=True)
         annotated = cv2.imread(str(result["annotated_path"]))
         if annotated is not None:
             cv2.imwrite(str(output), annotated)
         return {
+            "applicable": True,
             "outer_diameter_mm": result.get("od_mm"),
             "inner_diameter_mm": result.get("id_mm"),
             "thickness_mm": result.get("wall_thickness_mm"),
@@ -989,10 +1010,10 @@ class AnalysisService:
                     "index": int(item["index"]),
                     "label": item["confirmed_label"],
                     "bbox": item["bbox"],
-                    "route": item["route"],
+                    "route": dict(item["route"]),
                     "errors": [],
                 }
-                route = item["route"]
+                route = item_result["route"]
                 operations = (
                     ("dimensions", "Measuring", "Measuring jewel size", 8, self._run_dimension),
                     ("beads", "Checking beads", "Detecting round beads", 7, self._run_beads),
@@ -1012,6 +1033,15 @@ class AnalysisService:
                     )
                     try:
                         item_result[key] = operation(state, item)
+                        if (
+                            key == "dimensions"
+                            and item["confirmed_label"] == "Finger Ring"
+                            and item_result[key].get("applicable") is False
+                            and not route.get("stones")
+                        ):
+                            route["stones"] = True
+                            route["stone_reason"] = "ring_dimensions_unavailable"
+                            total_steps += 1
                     except Exception as exc:  # Keep mixed-item analysis progressing.
                         item_result["errors"].append({"stage": key, "message": str(exc)})
                     completed_steps += 1
@@ -1030,6 +1060,14 @@ class AnalysisService:
                         result[key] = result_items[0][key]
             state = self.repository.get(capture_id) or state
             state["result"] = result
+            # Persist the actual route so weights, reports and reopened results
+            # include stone analysis when ring dimensions were unavailable.
+            for item, item_result in zip((state.get("classification") or {}).get("items") or [], result_items):
+                item["route"] = item_result["route"]
+            state.setdefault("route", {}).update({
+                "stones": any(item["route"].get("stones") for item in result_items),
+                "items": [item["route"] for item in result_items],
+            })
             if len(result_items) == 1:
                 result["weights"] = weight_summary(state)
             if self.artifact_finalizer is not None:

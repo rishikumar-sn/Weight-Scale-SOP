@@ -681,6 +681,7 @@ export default function App() {
                           <span className="completeBadge">Complete</span>
                         </div>
                         <div className="summaryGrid compact">
+                          {item.dimensions?.applicable === false && <div className="wide"><span>Dimensions unavailable</span><strong>{item.dimensions.reason}</strong></div>}
                           {item.dimensions?.outer_diameter_mm != null && <div><span>Outer diameter</span><strong>{Number(item.dimensions.outer_diameter_mm).toFixed(2)} mm</strong></div>}
                           {item.dimensions?.inner_diameter_mm != null && <div><span>Inner diameter</span><strong>{Number(item.dimensions.inner_diameter_mm).toFixed(2)} mm</strong></div>}
                           {item.beads && <div><span>Bead analysis</span><strong>{item.beads.beads_detected ? "Beads detected" : "Beads not detected"}</strong></div>}
@@ -691,7 +692,7 @@ export default function App() {
                         </div>
                         {(item.errors || []).map((warning: any) => <p className="itemWarning" key={warning.stage}>{warning.stage}: {warning.message}</p>)}
                         <div className="resultGallery">
-                          <ResultImage src={itemMedia.dimensions} alt={`Jewel ${item.index} size result`} label="Dimension analysis" />
+                          <ResultImage src={itemMedia.dimensions} alt={`Jewel ${item.index} size result`} label={item.dimensions?.applicable === false ? "Ring image — dimensions unavailable" : "Dimension analysis"} />
                           <ResultImage src={itemMedia.beads} alt={`Jewel ${item.index} bead result`} label="Bead analysis" />
                           <ResultImage src={itemMedia.stones} alt={`Jewel ${item.index} stone result`} label="Stone analysis" />
                         </div>

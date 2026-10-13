@@ -95,6 +95,27 @@ def _binary(mask: np.ndarray, shape: tuple[int, int] | None = None) -> np.ndarra
     return result
 
 
+def is_warm_metal_shadow(color: str, image_bgr: np.ndarray, mask: np.ndarray) -> bool:
+    """Reject neutral-classified regions whose raw pixels retain gold colour.
+
+    Dark saturated gold has low LAB chroma because it is underexposed. Edge
+    enclosure also occurs in filigree, so neither cue proves a black stone.
+    Check raw HSV before normalization can remove the warm shadow colour.
+    Neutral black and chromatic red/green/blue/purple faces remain eligible.
+    """
+    # A tiny glare spot can also label an otherwise dark gold recess white.
+    if color not in {"Black", "White/Colorless"}:
+        return False
+    pixels = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)[mask > 0]
+    if not len(pixels):
+        return False
+    warm_shadow = (
+        (pixels[:, 0] >= 6) & (pixels[:, 0] <= 45)
+        & (pixels[:, 1] >= 65) & (pixels[:, 2] <= 110)
+    )
+    return float(np.mean(warm_shadow)) >= 0.60
+
+
 def _bbox(mask: np.ndarray) -> list[int]:
     points = cv2.findNonZero(mask)
     if points is None:

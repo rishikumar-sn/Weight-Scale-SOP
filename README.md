@@ -133,6 +133,29 @@ devices even when completed sessions are later synchronized to a cloud server.
 
 ## Runtime notes
 
+Finger rings with an unclear opening or missing AprilTag calibration return the
+captured ring image and an explicit dimensions-unavailable reason. The same
+capture then runs stone analysis. Rings with measurable boundaries keep their
+normal dimension-only route. Other measurement failures remain analysis warnings.
+
+Stone refinement rejects neutral regions whose original pixels are predominantly
+dark, saturated gold, including gold recesses with small glare highlights. This
+prevents edge enclosure and low LAB chroma from turning warm metal shadows into
+stones. Image analysis cannot guarantee zero false detections for every capture;
+neutral cavities and black stones can have indistinguishable pixels.
+
+To review dimension-rejected dataset rings without changing source captures:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\validate_ring_stones.py
+```
+
+The replay reads `data/ring-validation/report/results.json` and writes a gallery
+to `data/ring-validation/stones/index.html`. Pass `--labels labels.json` with
+source filenames mapped to `true` (stones visible) or `false` (no visible stones)
+to score false positives and false negatives. Unlabelled captures are visual
+review only.
+
 - Default camera: index `0`, 1920x1080 at 30 FPS, displayed with 270-degree rotation.
 - Default scale: `COM12` at 9600 baud; CH340 devices are also auto-detected.
 - ONNX uses CPU by default. A verified provider list can be supplied through

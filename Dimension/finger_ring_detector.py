@@ -4,6 +4,10 @@ import cv2
 import numpy as np
 
 
+class RingDimensionsUnavailable(RuntimeError):
+    """The capture does not support a reliable ring boundary measurement."""
+
+
 def _points(ellipse, offsets):
     (cx, cy), (da, db), angle = ellipse
     theta = np.linspace(0, 2 * np.pi, 180, endpoint=False)
@@ -174,6 +178,6 @@ def visible_ring_ellipses(img, scale=None):
                      - center_distance / max(radius * .1, 1.))
             candidates.append((score, outer, inner))
     if not candidates:
-        raise RuntimeError('Finger-ring opening or both band boundaries are not clearly visible. Place the ring flat with its center hole clear.')
+        raise RingDimensionsUnavailable('Finger-ring opening or both band boundaries are not clearly visible. Place the ring flat with its center hole clear.')
     _, outer, inner = max(candidates, key=lambda item: item[0])
     return outer, inner
