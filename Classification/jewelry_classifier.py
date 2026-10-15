@@ -284,12 +284,17 @@ class JewelryZeroShotClassifier:
         text_model_id: str = DEFAULT_TEXT_MODEL_ID,
         embedding_cache_path: str | Path = DEFAULT_CACHE_FILE,
         providers: list[str] | None = None,
+        gallery_path: str | Path | None = None,
+        foreign_embedding_cache_path: str | Path | None = None,
     ) -> None:
         self.base_dir = Path(__file__).resolve().parent
         self.onnx_model_path = self._resolve_path(onnx_model_path)
         self.prompt_path = self._resolve_path(prompt_path)
         self.embedding_cache_path = self._resolve_path(embedding_cache_path)
-        self.gallery_path = self.base_dir / DEFAULT_GALLERY_FILE
+        self.gallery_path = self._resolve_path(gallery_path or DEFAULT_GALLERY_FILE)
+        self.foreign_embedding_cache_path = self._resolve_path(
+            foreign_embedding_cache_path or DEFAULT_FOREIGN_CACHE_FILE
+        )
         self.text_model_id = text_model_id
         (
             self.group_prompt_config,
@@ -321,8 +326,11 @@ class JewelryZeroShotClassifier:
             label: index for index, label in enumerate(self.group_labels)
         }
         self.group_to_class_indices = self._build_group_to_class_indices()
-        self.gallery = CorrectionGallery(self.gallery_path)
+        self.gallery = self._make_gallery()
         self._load_foreign_object_embeddings()
+
+    def _make_gallery(self) -> CorrectionGallery:
+        return CorrectionGallery(self.gallery_path)
 
     def _load_foreign_object_embeddings(self) -> None:
         """Keep narrow foreign-object evidence separate from jewellery scores."""
@@ -336,7 +344,7 @@ class JewelryZeroShotClassifier:
             sort_keys=True,
         )
         fingerprint = hashlib.sha256(payload.encode("utf-8")).hexdigest()
-        cache_path = self.base_dir / DEFAULT_FOREIGN_CACHE_FILE
+        cache_path = self.foreign_embedding_cache_path
         if cache_path.exists():
             with np.load(cache_path, allow_pickle=False) as cache:
                 if str(cache["prompt_hash"].item()) == fingerprint:

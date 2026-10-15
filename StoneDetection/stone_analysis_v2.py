@@ -23,6 +23,7 @@ import numpy as np
 FASTSAM_STONE_REFINEMENT_ENABLED = True
 STONE_CANDIDATE_MIN_AREA = 6
 STONE_CANDIDATE_MAX_COUNT = 48
+STONE_OVERFLOW_MAX_COUNT = 24
 STONE_FASTSAM_MAX_CANDIDATES = 8
 STONE_CROP_PADDING_RATIO = 2.0
 STONE_CROP_MIN_SIZE = 64
@@ -443,6 +444,7 @@ def generate_stone_candidates(
     gold_mask: np.ndarray,
     glare_mask: np.ndarray | None = None,
     max_candidates: int = STONE_CANDIDATE_MAX_COUNT,
+    recover_overflow: bool = True,
 ) -> list[dict[str, Any]]:
     """Convert color/learned seeds and structural evidence into candidates."""
     shape = image_bgr.shape[:2]
@@ -646,7 +648,41 @@ def generate_stone_candidates(
     candidates.sort(
         key=lambda item: (-float(item["confidence"]), -int(item["seed_area_px"]))
     )
-    candidates = candidates[: max(1, int(max_candidates))]
+    limit = max(1, int(max_candidates))
+    primary = candidates[:limit]
+    # Confidence sorting can fill the budget with tiny, saturated metal
+    # fragments before larger, dimmer stone faces. Keep the original budget
+    # and ordering intact, but rescue independently supported complete faces.
+    # These candidates cannot compete with primary seeds during refinement.
+    overflow = []
+    overflow_pool = candidates[limit:] if recover_overflow else []
+    overflow_lab = None
+    overflow_hsv = None
+    for candidate in overflow_pool:
+        if candidate["seed_area_px"] < 80:
+            continue
+        sources = set(candidate["source_methods"])
+        if not sources.intersection({"non_gold_hsv_residual", "non_gold_neutral_residual"}):
+            continue
+        if overflow_lab is None:
+            overflow_lab = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2LAB)
+            overflow_hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
+        classification = classify_stone_instance_color(
+            image_bgr, candidate["seed_mask"], gold_mask=gold_mask,
+            lab_image=overflow_lab, hsv_image=overflow_hsv,
+        )
+        if classification["color"] not in {
+            "Red", "Pink", "Green", "Blue", "Purple/Violet",
+        } or float(classification["color_confidence"]) < 0.65:
+            continue
+        # Neutral overflow is deliberately excluded: shadowed background gaps
+        # between beads can have the same enclosure and HSV values as white
+        # stones. Existing neutral detection keeps its validated behaviour.
+        candidate["overflow_recovery"] = True
+        overflow.append(candidate)
+        if len(overflow) >= STONE_OVERFLOW_MAX_COUNT:
+            break
+    candidates = primary + overflow
     for index, candidate in enumerate(candidates, start=1):
         candidate["candidate_id"] = index
     return candidates
@@ -826,7 +862,10 @@ def refine_candidate_with_opencv(
     local_seed = candidate["seed_mask"][y1:y2, x1:x2]
     local_proposal = candidate["proposal_mask"][y1:y2, x1:x2]
     local_strict_gold = strict_gold_mask[y1:y2, x1:x2]
-    if crop.size and cv2.countNonZero(local_seed) >= STONE_CANDIDATE_MIN_AREA:
+    # Recovery already supplies a complete face. Validate that proposal below
+    # without randomized GrabCut, preserving the RNG sequence for later jewels.
+    if (crop.size and cv2.countNonZero(local_seed) >= STONE_CANDIDATE_MIN_AREA
+            and not candidate.get("overflow_recovery")):
         grab_mask = np.full(local_seed.shape, cv2.GC_PR_BGD, dtype=np.uint8)
         grab_mask[local_jewel == 0] = cv2.GC_BGD
         probable = cv2.dilate(
@@ -1045,6 +1084,7 @@ def build_final_stone_instances(
         allow_fastsam = bool(
             fastsam_used < STONE_FASTSAM_MAX_CANDIDATES
             and float(candidate.get("confidence", 0.0)) >= 0.55
+            and not candidate.get("overflow_recovery")
         )
         refined = refine_stone_candidate(
             image_bgr,
@@ -1063,6 +1103,10 @@ def build_final_stone_instances(
             index
             for index, other in enumerate(candidates)
             if index != candidate_index
+            and not (
+                other.get("overflow_recovery")
+                and not candidate.get("overflow_recovery")
+            )
             and cv2.countNonZero(
                 cv2.bitwise_and(mask, other["seed_mask"])
             ) > 0
@@ -1099,8 +1143,13 @@ def build_final_stone_instances(
             and not metal_texture_only
             and overlap < 0.62
         )
-        if accepted and overlap > 0:
-            mask = cv2.bitwise_and(mask, cv2.bitwise_not(occupied))
+        if accepted and (overlap > 0 or candidate.get("overflow_recovery")):
+            protected = occupied
+            if candidate.get("overflow_recovery"):
+                # Leave a pixel between recovery and prior instances so the
+                # downstream touching-mask separator cannot erode old faces.
+                protected = cv2.dilate(occupied, np.ones((3, 3), np.uint8))
+            mask = cv2.bitwise_and(mask, cv2.bitwise_not(protected))
             accepted = cv2.countNonZero(mask) >= STONE_CANDIDATE_MIN_AREA
         diagnostic = {
             "candidate_id": int(candidate["candidate_id"]),
@@ -1110,6 +1159,7 @@ def build_final_stone_instances(
             "accepted": bool(accepted),
             "metal_texture_rejected": bool(metal_texture_only),
             "candidate_confidence": float(candidate["confidence"]),
+            "overflow_recovery": bool(candidate.get("overflow_recovery")),
             "boundary_confidence": float(refined["confidence"]),
             "overlap_with_accepted_instances": round(float(overlap), 4),
             **refined["diagnostics"],
@@ -1124,6 +1174,8 @@ def build_final_stone_instances(
         )
         for part in parts:
             source_region = dict(candidate.get("source_region") or {})
+            if candidate.get("overflow_recovery"):
+                source_region["overflow_recovery"] = True
             source_region.update(
                 {
                     "mask": part,
@@ -1146,6 +1198,7 @@ def build_final_stone_instances(
         instance["region_id"] = index
     return instances, {
         "candidate_count": len(candidates),
+        "overflow_candidate_count": sum(bool(c.get("overflow_recovery")) for c in candidates),
         "accepted_candidate_count": sum(bool(item["accepted"]) for item in candidate_diagnostics),
         "stone_instance_count": len(instances),
         "fastsam_candidate_calls": fastsam_used,

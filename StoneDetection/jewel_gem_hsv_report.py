@@ -5172,7 +5172,9 @@ def analyze_jewel_candidate(
                     continue
                 if color == "Yellow/Gold" and refined_gold_share > 0.45:
                     continue
-                if color == "Red":
+                # Recovery masks are complete, protected proposals; regrowing
+                # them here could encroach on a previously accepted instance.
+                if color == "Red" and not region.get("overflow_recovery"):
                     red_mask, red_expansion = expand_stone_seed_to_full_region(
                         image_bgr=glare_processed_bgr,
                         seed_mask=mask,

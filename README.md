@@ -1,8 +1,8 @@
 # Jewellery Capture
 
-Windows-first edge application for a rotated Full-HD USB camera, serial weighing
-scale, jewellery analysis, and branded PDF reports. The same backend is structured
-to run on Linux later.
+Cross-platform edge application for a rotated Full-HD USB camera, serial weighing
+scale, jewellery analysis, and branded PDF reports. For Ubuntu deployment, see
+the separate [Linux setup and operation guide](README_LINUX.md).
 
 ## Project layout
 
@@ -60,6 +60,44 @@ processing rate (`camera.processed_fps`). The live JPEG preview is limited to a
 960 pixel longest side by default, while saved captures retain the camera's full
 resolution.
 
+## Live classifier model trial
+
+The main app now defaults to SigLIP2 **base-patch16-384** for the live trial.
+Prompts, rejection rules, dimension fallback, gallery matching and manual
+confirmation/learning keep the same behavior. Its local model/text/tokenizer
+assets live in `Classification/siglip2-base-patch16-384/`; its gallery is
+`Classification/jewelry_correction_gallery.base384.npz`. Both are independent
+of the retained patch32 model and original gallery. Each gallery learns only
+while its model is active; embeddings cannot be shared between these models.
+
+The tested assets and gallery can be prepared from the local benchmark files:
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 scripts\prepare_siglip384.py
+```
+
+This seeds the new gallery from confirmed historical item embeddings and
+re-embeds the existing deterministic calibration split. It keeps a backup of
+the original gallery and writes a migration report under
+`data/classification-evaluation/base384_migration/`. Run it once and wait for
+completion before starting the live trial. Restart the backend to load a model
+change; no frontend rebuild is needed.
+
+Start the default 384 trial:
+
+```powershell
+$env:JEWELLERY_CLASSIFIER_MODEL = "base384"
+.\scripts\start_backend.ps1
+```
+
+To switch back to the original model and its original gallery, shut down the
+backend and run:
+
+```powershell
+$env:JEWELLERY_CLASSIFIER_MODEL = "patch32"
+.\scripts\start_backend.ps1
+```
+
 ## Packet tare captures
 
 The **Tare weight** tab supports pledge and release captures. Each capture uses the
@@ -116,16 +154,15 @@ python run.py
 
 ## Linux setup
 
-Install Python 3.10+, Node.js, npm, and `v4l2-ctl`, then run:
+Follow [README_LINUX.md](README_LINUX.md) for system packages, model transfers,
+and camera/scale permissions. Then install, build, and launch with:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
-npm ci --prefix frontend
-npm run build --prefix frontend
-python run.py
+bash startup.sh
 ```
+
+Subsequent launches use `bash startbackend.sh`. The backend serves the built UI
+and API together on port 8000.
 
 The Linux camera backend uses V4L2. The scale service automatically searches
 serial devices, including CH340 adapters. The edge PC must continue to own the USB
@@ -157,7 +194,8 @@ to score false positives and false negatives. Unlabelled captures are visual
 review only.
 
 - Default camera: index `0`, 1920x1080 at 30 FPS, displayed with 270-degree rotation.
-- Default scale: `COM12` at 9600 baud; CH340 devices are also auto-detected.
+- Default scale: `COM12` on Windows, auto-detection on Linux, at 9600 baud;
+  CH340 devices are preferred during auto-detection.
 - ONNX uses CPU by default. A verified provider list can be supplied through
   `JEWELLERY_ONNX_PROVIDERS`.
 - Runtime captures and reports are written under `data/sessions/`.

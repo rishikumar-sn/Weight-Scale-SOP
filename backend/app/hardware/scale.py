@@ -46,6 +46,10 @@ class ScaleService:
 
     def _select_port(self) -> str:
         configured = str(self._settings_provider()["scale"].get("port") or "").strip()
+        # Persistent Linux /dev/serial/by-id aliases are not listed by comports().
+        # Keep retrying an explicitly selected device even while it is unplugged.
+        if configured.startswith("/dev/"):
+            return configured
         ports = list(serial.tools.list_ports.comports())
         if configured and any(item.device.casefold() == configured.casefold() for item in ports):
             return configured

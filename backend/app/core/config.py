@@ -36,7 +36,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "temporal_average_frames": 90,
     },
     "scale": {
-        "port": "COM12",
+        "port": "COM12" if os.name == "nt" else "",
         "baud_rate": 9600,
     },
     "rois": {

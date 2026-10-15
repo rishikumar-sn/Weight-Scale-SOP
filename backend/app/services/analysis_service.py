@@ -34,6 +34,7 @@ for module_path in (
         sys.path.insert(0, str(module_path))
 
 from Classification.jewelry_classifier import JewelryZeroShotClassifier  # noqa: E402
+from Classification.siglip384_classifier import Siglip384Classifier  # noqa: E402
 from Dimension.bangle_detector import detect_bangle  # noqa: E402
 from Dimension.finger_ring_detector import RingDimensionsUnavailable  # noqa: E402
 import StoneDetection.jewel_gem_hsv_report as stone_detection  # noqa: E402
@@ -386,12 +387,18 @@ class AnalysisService:
     def _get_classifier(self) -> JewelryZeroShotClassifier:
         with self._model_lock:
             if self._classifier is None:
-                self._classifier = JewelryZeroShotClassifier(
-                    onnx_model_path=PROJECT_ROOT / "Classification" / "siglip2-base-patch32-256_vision_encoder.sim.onnx",
-                    prompt_path=PROJECT_ROOT / "Classification" / "jewelry_prompts.json",
-                    embedding_cache_path=PROJECT_ROOT / "Classification" / "jewelry_text_embeddings_cache.npz",
-                    providers=self._onnx_providers(),
-                )
+                model = os.environ.get("JEWELLERY_CLASSIFIER_MODEL", "base384").strip().lower()
+                if model == "base384":
+                    self._classifier = Siglip384Classifier(providers=self._onnx_providers())
+                elif model == "patch32":
+                    self._classifier = JewelryZeroShotClassifier(
+                        onnx_model_path=PROJECT_ROOT / "Classification" / "siglip2-base-patch32-256_vision_encoder.sim.onnx",
+                        prompt_path=PROJECT_ROOT / "Classification" / "jewelry_prompts.json",
+                        embedding_cache_path=PROJECT_ROOT / "Classification" / "jewelry_text_embeddings_cache.npz",
+                        providers=self._onnx_providers(),
+                    )
+                else:
+                    raise ValueError("JEWELLERY_CLASSIFIER_MODEL must be 'base384' or 'patch32'.")
             return self._classifier
 
     @staticmethod
@@ -521,6 +528,7 @@ class AnalysisService:
         predicted_labels = [str(item["predicted_label"]) for item in classified_items]
         state["classification"] = {
             # These aggregate fields keep old clients and reports readable.
+            "model_id": getattr(classifier, "text_model_id", ""),
             "predicted_label": ", ".join(predicted_labels),
             "confirmed_label": None,
             "confirmed": False,

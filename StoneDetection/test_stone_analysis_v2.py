@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 import cv2
 import numpy as np
@@ -40,6 +41,84 @@ class FakeFastSam:
 
 
 class StoneAnalysisV2Tests(unittest.TestCase):
+    def test_candidate_budget_recovers_large_color_face_without_displacing_seeds(self):
+        image = np.full((240, 240, 3), (30, 170, 210), np.uint8)
+        jewel = np.full((240, 240), 255, np.uint8)
+        gold = jewel.copy()
+        face = circle_mask((240, 240), (180, 180), 12)
+        image[face > 0] = (20, 90, 20)
+        gold[face > 0] = 0
+        seeds = []
+        for index in range(48):
+            seed = circle_mask((240, 240), (5 + index % 12 * 12, 5 + index // 12 * 12), 2)
+            seeds.append({"mask": seed, "color": "Red", "circularity": 1.0})
+        residual = {"mask": face, "confidence": 0.60, "median_saturation": 190, "median_value": 90}
+        with patch.object(v2, "_non_gold_color_components", return_value=[residual]), \
+             patch.object(v2, "_non_gold_neutral_components", return_value=[]), \
+             patch.object(v2, "_structural_components", return_value=[]):
+            previous = v2.generate_stone_candidates(image, jewel, seeds, gold, recover_overflow=False)
+            current = v2.generate_stone_candidates(image, jewel, seeds, gold)
+        self.assertEqual(len(previous), 48)
+        self.assertEqual(len(current), 49)
+        for before, after in zip(previous, current):
+            np.testing.assert_array_equal(before["seed_mask"], after["seed_mask"])
+            self.assertEqual(before["candidate_id"], after["candidate_id"])
+        self.assertTrue(current[-1]["overflow_recovery"])
+        np.testing.assert_array_equal(current[-1]["seed_mask"], face)
+        for color, confidence in (("Yellow/Gold", .98), ("Black", .98), ("White/Colorless", .98), ("Green", .50)):
+            with self.subTest(color=color, confidence=confidence), \
+                 patch.object(v2, "_non_gold_color_components", return_value=[residual]), \
+                 patch.object(v2, "_non_gold_neutral_components", return_value=[]), \
+                 patch.object(v2, "_structural_components", return_value=[]), \
+                 patch.object(v2, "classify_stone_instance_color", return_value={
+                     "color": color, "color_confidence": confidence,
+                 }):
+                self.assertEqual(len(v2.generate_stone_candidates(image, jewel, seeds, gold)), 48)
+        with patch.object(v2, "_non_gold_color_components", return_value=[residual]), \
+             patch.object(v2, "_non_gold_neutral_components", return_value=[]), \
+             patch.object(v2, "_structural_components", return_value=[]), \
+             patch.object(v2, "_metal_surround_ratio", return_value=.10), \
+             patch.object(v2, "classify_stone_instance_color", return_value={
+                 "color": "White/Colorless", "color_confidence": .98,
+             }):
+            self.assertEqual(len(v2.generate_stone_candidates(image, jewel, seeds, gold)), 48)
+
+    def test_overflow_seed_cannot_take_pixels_from_an_existing_prediction(self):
+        primary_mask = circle_mask((120, 120), (60, 60), 18)
+        supplemental_mask = circle_mask((120, 120), (75, 60), 12)
+        primary = self.candidate(seed=circle_mask((120, 120), (60, 60), 4))
+        supplemental = self.candidate(seed=circle_mask((120, 120), (75, 60), 4))
+        supplemental.update(candidate_id=2, overflow_recovery=True)
+        def refine(_image, _jewel, candidate, *_args, **_kwargs):
+            return {"mask": primary_mask.copy() if candidate["candidate_id"] == 1 else supplemental_mask.copy(),
+                    "method": "opencv", "confidence": .8, "diagnostics": {"gold_overlap": 0.0}}
+        with patch.object(v2, "refine_stone_candidate", side_effect=refine), \
+             patch.object(v2, "_watershed_split", side_effect=lambda _image, mask, _area: [mask]):
+            instances, diagnostics = v2.build_final_stone_instances(
+                self.image, self.jewel, [primary, supplemental], self.gold, self.strict_gold,
+            )
+        np.testing.assert_array_equal(instances[0]["mask"], primary_mask)
+        self.assertEqual(diagnostics["overflow_candidate_count"], 1)
+        if len(instances) > 1:
+            self.assertEqual(cv2.countNonZero(cv2.bitwise_and(instances[0]["mask"], instances[1]["mask"])), 0)
+            self.assertEqual(cv2.countNonZero(cv2.bitwise_and(
+                cv2.dilate(instances[0]["mask"], np.ones((3, 3), np.uint8)), instances[1]["mask"],
+            )), 0)
+
+    def test_overflow_does_not_consume_grabcut_randomness_or_model_budget(self):
+        candidate = self.candidate()
+        candidate["overflow_recovery"] = True
+        with patch.object(cv2, "grabCut") as grabcut, \
+             patch.object(v2, "refine_candidate_with_fastsam") as fastsam:
+            instances, diagnostics = v2.build_final_stone_instances(
+                self.image, self.jewel, [candidate], self.gold, self.strict_gold,
+                fastsam_model=FakeFastSam(),
+            )
+        grabcut.assert_not_called()
+        fastsam.assert_not_called()
+        self.assertEqual(diagnostics["fastsam_candidate_calls"], 0)
+        self.assertEqual(len(instances), 1)
+
     def setUp(self):
         self.shape = (120, 120)
         self.jewel = circle_mask(self.shape, (60, 60), 50)

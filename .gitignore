@@ -17,9 +17,13 @@ frontend/vite.config.d.ts
 
 # Download/generated heavyweight vision encoder (not stored in the repository)
 Classification/siglip2-base-patch32-256_vision_encoder.sim.onnx
+Classification/siglip2-base-patch16-384/
+Classification/jewelry_correction_gallery.base384.npz
+Classification/jewelry_correction_gallery.base384.pending.npz
 models/detection/bead_finder.onnx
 
 data/app.db
+data/backend.lock
 data/sessions/
 **/capture/
 **/captures/
