@@ -210,7 +210,7 @@ class OnnxBeadDetector:
         model_path: Path,
         providers: list[str] | None = None,
     ) -> None:
-        providers = providers or ["CPUExecutionProvider"]
+        providers = ["CPUExecutionProvider"]
         self.session = ort.InferenceSession(str(model_path), providers=providers)
         self.input_name = self.session.get_inputs()[0].name
         self.input_size = onnx_image_size(self.session)
@@ -403,14 +403,7 @@ class AnalysisService:
 
     @staticmethod
     def _onnx_providers() -> list[str]:
-        requested = [
-            item.strip()
-            for item in os.environ.get("JEWELLERY_ONNX_PROVIDERS", "CPUExecutionProvider").split(",")
-            if item.strip()
-        ]
-        available = set(ort.get_available_providers())
-        selected = [item for item in requested if item in available]
-        return selected or ["CPUExecutionProvider"]
+        return ["CPUExecutionProvider"]
 
     def _get_beads(self) -> OnnxBeadDetector:
         with self._model_lock:

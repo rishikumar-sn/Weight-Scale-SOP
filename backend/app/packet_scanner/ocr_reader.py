@@ -12,11 +12,11 @@ class OCRReader:
         from paddleocr import PaddleOCR
         # PaddleOCR 3.x uses predict(); 2.x uses ocr(). Keep one engine per worker.
         try:
-            self.engine = PaddleOCR(lang="en", use_textline_orientation=False,
+            self.engine = PaddleOCR(lang="en", device="cpu", use_textline_orientation=False,
                                     use_doc_orientation_classify=False, use_doc_unwarping=False,
                                     enable_mkldnn=False)
         except TypeError:
-            self.engine = PaddleOCR(lang="en", use_angle_cls=False, show_log=False)
+            self.engine = PaddleOCR(lang="en", use_gpu=False, use_angle_cls=False, show_log=False)
 
     def _items(self, image):
         if hasattr(self.engine, "predict"):

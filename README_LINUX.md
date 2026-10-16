@@ -34,6 +34,25 @@ OpenCV distribution in the environment to avoid conflicting `cv2` packages.
 References: [PaddlePaddle Linux installation](https://www.paddlepaddle.org.cn/documentation/docs/en/install/pip/linux-pip_en.html)
 and [Transformers installation](https://huggingface.co/docs/transformers/v5.15.0/en/installation).
 
+### CPU-only dependencies
+
+`requirements.txt` pins `torch==2.13.0+cpu` from the official
+[PyTorch CPU wheel index](https://pytorch.org/get-started/previous-versions/).
+The `+cpu` pin prevents pip selecting a CUDA build on Linux. `onnxruntime` and
+`paddlepaddle` are the CPU packages. No NVIDIA driver, CUDA toolkit, cuDNN,
+TensorRT, or GPU packages are needed. All application ONNX sessions and PaddleOCR
+explicitly use CPU, even if GPU hardware is present.
+
+Setup runs `scripts/verify_cpu.py` to reject GPU builds and NVIDIA dependencies.
+For an existing environment with CUDA packages, stop the backend, move `.venv`
+aside (for example `mv .venv .venv.previous`), and rerun `bash startup.sh` to
+create a clean CPU environment. Installing requirements does not remove leftover
+GPU dependencies from an old environment. Verify manually with:
+
+```bash
+.venv/bin/python scripts/verify_cpu.py
+```
+
 ## 2. Transfer source and model assets
 
 Clone the project or copy it to a directory owned by the deployment user, for
@@ -178,8 +197,9 @@ launches or another checkout.
 
 After frontend changes, rerun `startup.sh` or build with
 `npm run build --prefix frontend` before restarting the backend. Environment
-options such as `JEWELLERY_CLASSIFIER_MODEL` and `JEWELLERY_ONNX_PROVIDERS` can be
-exported before either launcher. The launchers do not automatically read `.env`.
+options such as `JEWELLERY_CLASSIFIER_MODEL` can be exported before either
+launcher. `JEWELLERY_ONNX_PROVIDERS` no longer overrides CPU inference.
+The launchers do not automatically read `.env`.
 
 ## 5. Verify the target PC
 

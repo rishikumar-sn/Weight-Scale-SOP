@@ -43,7 +43,7 @@ class TestbedSegmenter:
         self.inset_px = max(0, int(inset_px))
         self.session = ort.InferenceSession(
             str(self.model_path),
-            providers=providers or ["CPUExecutionProvider"],
+            providers=["CPUExecutionProvider"],
         )
         model_input = self.session.get_inputs()[0]
         shape = model_input.shape

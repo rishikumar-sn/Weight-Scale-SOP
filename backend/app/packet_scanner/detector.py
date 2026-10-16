@@ -19,9 +19,7 @@ class Detection:
 
 class Detector:
     def __init__(self, model_path):
-        available = ort.get_available_providers()
-        providers = [name for name in ("CUDAExecutionProvider", "CPUExecutionProvider") if name in available]
-        self.session = ort.InferenceSession(str(model_path), providers=providers)
+        self.session = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
         self.input = self.session.get_inputs()[0]
         self.outputs = self.session.get_outputs()
         self.provider = self.session.get_providers()[0]

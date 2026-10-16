@@ -196,8 +196,8 @@ review only.
 - Default camera: index `0`, 1920x1080 at 30 FPS, displayed with 270-degree rotation.
 - Default scale: `COM12` on Windows, auto-detection on Linux, at 9600 baud;
   CH340 devices are preferred during auto-detection.
-- ONNX uses CPU by default. A verified provider list can be supplied through
-  `JEWELLERY_ONNX_PROVIDERS`.
+- Inference always uses CPU. Requirements pin the CPU-only PyTorch wheel and
+  use the CPU ONNX Runtime and PaddlePaddle packages; CUDA is not required.
 - Runtime captures and reports are written under `data/sessions/`.
 - Saved camera areas and device settings are stored in `data/settings/app.json`.
 - One capture may contain multiple jewels. Keep a visible background gap between

@@ -33,6 +33,7 @@ export PYTHONUNBUFFERED=1
 .venv/bin/python -m pip install --upgrade pip
 .venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python -m pip check
+.venv/bin/python scripts/verify_cpu.py
 # npm ci installs native dependencies for this Linux host from the lockfile.
 npm ci --prefix frontend --include=dev
 npm run build --prefix frontend

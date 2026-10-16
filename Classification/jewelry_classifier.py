@@ -303,16 +303,9 @@ class JewelryZeroShotClassifier:
         ) = self._load_prompt_config()
         self.prompt_hash = self._build_prompt_hash()
         self.processor = self._load_processor()
-        available_providers = set(ort.get_available_providers())
-        requested_providers = providers or ["CPUExecutionProvider"]
-        active_providers = [
-            provider for provider in requested_providers if provider in available_providers
-        ]
-        if not active_providers:
-            active_providers = ["CPUExecutionProvider"]
         self.session = ort.InferenceSession(
             str(self.onnx_model_path),
-            providers=active_providers,
+            providers=["CPUExecutionProvider"],
         )
         self.embedding_output_index = self._find_embedding_output_index()
         (
