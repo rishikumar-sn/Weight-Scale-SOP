@@ -1,10 +1,9 @@
-from .config import ALLOWED_DIGIT_LENGTHS
+from .identifier import packet_identifier
 
 
 def validate(barcode, ocr):
-    valid = lambda value: bool(value and value.isascii() and value.isdigit() and len(value) in ALLOWED_DIGIT_LENGTHS)
-    barcode = barcode if valid(barcode) else ""
-    ocr = ocr if valid(ocr) else ""
+    barcode = packet_identifier(barcode) if barcode else ""
+    ocr = packet_identifier(ocr) if ocr else ""
     if barcode and ocr:
         return "MATCH" if barcode == ocr else "MISMATCH"
     if barcode:

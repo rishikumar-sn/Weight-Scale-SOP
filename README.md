@@ -98,6 +98,27 @@ The developed UI, full-frame bead model input, and result-image layout are
 included. Result images keep every jewellery row, growing vertically when needed
 instead of cutting off entries after the available space is filled.
 
+## Tare packet identifiers and replay
+
+The packet scanner accepts the original 7- or 8-digit numbers and alphanumeric
+IDs of 7 to 32 characters, including separators `-`, `/`, `.`, and `_` (for
+example, `EKM9005L-00001659`). Barcode decoding, OCR and comparison use the same
+validation. Letters, case, separators and leading zeros are preserved; OCR
+spacing and typographic dashes are normalized. A match requires independent
+barcode and OCR readings of the complete ID. Characters such as `O` and `0`
+are never substituted to force a match.
+
+Replay saved captures through the production detector and readers:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\replay_packet_sessions.py "D:\path\to\session1" "D:\path\to\session2" --expect "EKM9005L-00001659"
+```
+
+`--expect` is optional and only checks the final results. Review images, input
+crops, before/after JSON and timings are saved to `data/audits/packet-replay/`;
+source session files are not modified. Deploy the updated backend files and
+restart the backend on other capture devices to use the expanded ID support.
+
 ## Live classifier model trial
 
 The main app now defaults to SigLIP2 **base-patch16-384** for the live trial.

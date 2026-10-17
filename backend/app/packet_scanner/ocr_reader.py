@@ -1,10 +1,10 @@
 import logging
-import re
 
 import cv2
 import numpy as np
 
-from .config import ALLOWED_DIGIT_LENGTHS, OCR_REGION_RATIO
+from .config import OCR_REGION_RATIO
+from .identifier import packet_identifier
 
 
 class OCRReader:
@@ -45,14 +45,14 @@ class OCRReader:
         try:
             readings = []
             for text, score in self._items(crop):
-                digits = "".join(re.findall(r"\d+", text))
-                if digits.isascii() and len(digits) in ALLOWED_DIGIT_LENGTHS:
-                    readings.append((score, digits))
+                identifier = packet_identifier(text)
+                if identifier:
+                    readings.append((score, identifier))
         except Exception:
             logging.exception("Quick OCR check failed")
             return None
-        confidence, digits = max(readings, default=(0.0, ""))
-        return (digits, confidence, crop, crop, "original") if digits == barcode and confidence >= 0.90 else None
+        confidence, identifier = max(readings, default=(0.0, ""))
+        return (identifier, confidence, crop, crop, "original") if identifier == barcode and confidence >= 0.90 else None
 
     def read(self, image):
         h = image.shape[0]
@@ -76,9 +76,9 @@ class OCRReader:
                 logging.exception("OCR variant %s failed", name)
                 continue
             for text, score in items:
-                digits = "".join(re.findall(r"\d+", text))
-                if digits.isascii() and len(digits) in ALLOWED_DIGIT_LENGTHS and score > best[1]:
-                    best = (digits, score, candidate, name)
+                identifier = packet_identifier(text)
+                if identifier and score > best[1]:
+                    best = (identifier, score, candidate, name)
             if best[1] >= 0.90:
                 break
         return best[0], best[1], crop, best[2], best[3]

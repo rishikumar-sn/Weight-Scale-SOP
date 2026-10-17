@@ -2,7 +2,8 @@ import cv2
 import numpy as np
 import zxingcpp
 
-from .config import ALLOWED_DIGIT_LENGTHS, BARCODE_REGION_RATIO
+from .config import BARCODE_REGION_RATIO
+from .identifier import packet_identifier
 
 
 def region(image, ratio):
@@ -26,8 +27,8 @@ def read_barcode(image):
     for name, candidate in variants:
         for result in zxingcpp.read_barcodes(candidate, formats=zxingcpp.BarcodeFormat.Code128,
                                                try_rotate=True, try_downscale=True, try_invert=True):
-            value = result.text.strip()
-            if value.isascii() and value.isdigit() and len(value) in ALLOWED_DIGIT_LENGTHS:
+            value = packet_identifier(result.text)
+            if value:
                 return value, "Code128", candidate, name
     # Small camera labels often have only 1-2 pixels per narrow bar. A nearest-neighbor
     # upscale preserves those bar edges; fixed threshold handles low contrast on white labels.
@@ -41,7 +42,7 @@ def read_barcode(image):
                     for result in zxingcpp.read_barcodes(candidate, formats=zxingcpp.BarcodeFormat.Code128,
                                                          try_rotate=True, try_downscale=False, try_invert=True,
                                                          binarizer=binarizer):
-                        value = result.text.strip()
-                        if value.isascii() and value.isdigit() and len(value) in ALLOWED_DIGIT_LENGTHS:
+                        value = packet_identifier(result.text)
+                        if value:
                             return value, "Code128", candidate, f"{name}_{kind}_{factor}x_{binarizer}"
     return "", "", upper, "upper"

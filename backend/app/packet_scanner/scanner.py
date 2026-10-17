@@ -112,10 +112,10 @@ class Scanner:
         result.views.update(rectified=oriented, barcode_roi=region(oriented, BARCODE_REGION_RATIO), digit_roi=digit_roi,
                             ocr_processed=ocr_processed, barcode_processed=processed)
         result.message = {
-            "MATCH": "Target detected. Barcode and OCR digits match.",
-            "MISMATCH": "Barcode and printed digits differ. Check the packet.",
-            "BARCODE_ONLY": "Barcode read; printed digits could not be verified.",
-            "OCR_ONLY": "Printed digits read; barcode could not be verified.",
+            "MATCH": "Target detected. Barcode and printed packet ID match.",
+            "MISMATCH": "Barcode and printed packet ID differ. Check the packet.",
+            "BARCODE_ONLY": "Barcode read; printed packet ID could not be verified.",
+            "OCR_ONLY": "Printed packet ID read; barcode could not be verified.",
             "NOT_FOUND": "Target detected, but neither value could be read. Try again.",
         }[result.status]
         if not result.barcode and oriented.shape[1] < 260:
