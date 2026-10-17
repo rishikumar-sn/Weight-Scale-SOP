@@ -28,10 +28,10 @@
       "height": 0.4444444813014228
     },
     "apriltag": {
-      "x": 0.06851851851851852,
-      "y": 0.1546875,
+      "x": 0.05648148148148148,
+      "y": 0.13072916666666667,
       "width": 0.09351851851851851,
-      "height": 0.052083333333333336
+      "height": 0.05260416666666667
     }
   },
   "apriltag": {
@@ -64,5 +64,76 @@
   },
   "time": {
     "source": "network-synchronized system clock"
+  },
+  "hardware_profiles": {
+    "windows": {
+      "camera": {
+        "index": 0,
+        "width": 1920,
+        "height": 1080,
+        "fps": 30,
+        "rotation": 270,
+        "preview_quality": 78,
+        "preview_max_dimension": 960,
+        "power_line_hz": 50,
+        "shutter_denominator": 100,
+        "driver_managed_exposure": true,
+        "linux_image_controls": {},
+        "software_anti_flicker": false,
+        "anti_flicker_row_normalize": false,
+        "anti_flicker_temporal_alpha": 0.08,
+        "anti_flicker_gain_limit": 1.35,
+        "anti_flicker_mode": "temporal_average",
+        "temporal_average_frames": 90,
+        "adaptive": {
+          "target_luma": 190,
+          "max_average_frames": 6,
+          "flicker_threshold": 0.02,
+          "row_correction": true
+        }
+      },
+      "scale": {
+        "port": "COM12",
+        "baud_rate": 9600
+      }
+    },
+    "linux": {
+      "camera": {
+        "index": 0,
+        "width": 1920,
+        "height": 1080,
+        "fps": 30,
+        "rotation": 270,
+        "preview_quality": 78,
+        "preview_max_dimension": 960,
+        "power_line_hz": 50,
+        "shutter_denominator": 100,
+        "driver_managed_exposure": false,
+        "linux_image_controls": {
+          "brightness": 96,
+          "contrast": 128,
+          "saturation": 128,
+          "gain": 0,
+          "backlight_compensation": 0,
+          "white_balance_automatic": 1
+        },
+        "software_anti_flicker": false,
+        "anti_flicker_row_normalize": false,
+        "anti_flicker_temporal_alpha": 0.08,
+        "anti_flicker_gain_limit": 1.35,
+        "anti_flicker_mode": "driver",
+        "temporal_average_frames": 1,
+        "adaptive": {
+          "target_luma": 190,
+          "max_average_frames": 6,
+          "flicker_threshold": 0.02,
+          "row_correction": true
+        }
+      },
+      "scale": {
+        "port": "",
+        "baud_rate": 9600
+      }
+    }
   }
 }

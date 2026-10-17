@@ -193,7 +193,7 @@ def _adaptive_bead_nms(
 
 
 def _box_center_in_region(bbox: list[int], region: dict[str, int] | None) -> bool:
-    """Keep a full-ROI detection only when its centre belongs to the requested jewel."""
+    """Keep a full-frame detection only when its centre belongs to the requested jewel."""
     if not region:
         return True
     center_x = (bbox[0] + bbox[2]) / 2.0
@@ -223,8 +223,11 @@ class OnnxBeadDetector:
         threshold: float = BEAD_DETECTION_SCORE_THRESHOLD,
         detection_region: dict[str, int] | None = None,
         measurement_scale: dict[str, Any] | None = None,
+        detection_mask: np.ndarray | None = None,
     ) -> tuple[dict[str, Any], np.ndarray, np.ndarray]:
         height, width = image.shape[:2]
+        if detection_mask is not None and detection_mask.shape != (height, width):
+            raise ValueError("Bead detection mask must match the full-frame image dimensions")
         tensor, scale, left, top = prepare_onnx_input(image, self.input_size)
         output = np.asarray(self.session.run(None, {self.input_name: tensor})[0])
         predictions = np.squeeze(output)
@@ -250,6 +253,13 @@ class OnnxBeadDetector:
             {"bbox": boxes[index], "score": round(scores[index], 4)}
             for index in selected
             if _box_center_in_region(boxes[index], detection_region)
+            and (
+                detection_mask is None
+                or detection_mask[
+                    (boxes[index][1] + boxes[index][3]) // 2,
+                    (boxes[index][0] + boxes[index][2]) // 2,
+                ] > 0
+            )
         ]
         detections = [dict(candidate) for candidate in candidates]
         bead_analysis = analyze_bead_detections(image, detections, measurement_scale)
@@ -865,13 +875,30 @@ class AnalysisService:
         }
 
     def _run_beads(self, state: dict[str, Any], item: dict[str, Any] | None = None) -> dict[str, Any]:
-        # Run on the complete configured jewellery ROI, letterboxed to the
-        # input size declared by the ONNX model. A tight per-item crop changes
-        # bead scale and context, so detections are spatially assigned afterward.
-        input_path = state["paths"]["working"]
+        # Preserve the full-frame scale/context used for training. Apply the
+        # testbed polygon and per-jewel bounds only to the decoded predictions.
+        input_path = state["paths"]["original"]
         image = cv2.imread(input_path)
         if image is None:
-            raise RuntimeError("Could not load the captured jewellery image")
+            raise RuntimeError("Could not load the original captured full-frame image")
+        mask_path = state["paths"].get("testbed_source_mask")
+        detection_mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE) if mask_path else None
+        if detection_mask is None:
+            raise RuntimeError("The full-frame testbed mask is unavailable; capture again")
+        processing_roi = (state.get("rois") or {}).get("processing")
+        if not processing_roi:
+            raise RuntimeError("The testbed coordinate mapping is unavailable; capture again")
+        detection_region = dict(processing_roi)
+        if item is not None:
+            bbox = item["bbox"]
+            # The processing origin can be negative because the testbed view
+            # includes virtual square padding. No resize is applied to it.
+            detection_region = {
+                "x": int(processing_roi["x"]) + int(bbox["x"]),
+                "y": int(processing_roi["y"]) + int(bbox["y"]),
+                "w": int(bbox["w"]),
+                "h": int(bbox["h"]),
+            }
         calibration = state.get("calibration") or {}
         measurement_scale = None
         if calibration.get("available") and calibration.get("found"):
@@ -882,8 +909,9 @@ class AnalysisService:
         result, annotated, onnx_annotated = self._get_beads().run(
             image,
             threshold=BEAD_DETECTION_SCORE_THRESHOLD,
-            detection_region=(item or {}).get("bbox"),
+            detection_region=detection_region,
             measurement_scale=measurement_scale,
+            detection_mask=detection_mask,
         )
         suffix = f"item_{int(item['index']):02d}" if item else "beads"
         path = self.repository.session_dir(state["id"]) / "results" / "beads" / f"{suffix}.png"
@@ -893,7 +921,9 @@ class AnalysisService:
         cv2.imwrite(str(onnx_path), onnx_annotated)
         result["image"] = str(path)
         result["onnx_image"] = str(onnx_path)
-        result["input_source"] = "configured_roi"
+        result["input_source"] = "full_frame"
+        result["coordinate_space"] = "full_frame"
+        result["region_filter"] = "box_center_in_testbed_mask_and_jewel_region"
         return result
 
     def _run_stones(self, state: dict[str, Any], item: dict[str, Any] | None = None) -> dict[str, Any]:

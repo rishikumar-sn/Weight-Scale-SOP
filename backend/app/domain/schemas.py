@@ -50,3 +50,7 @@ class CaptureSummary(BaseModel):
     classification: dict[str, Any] = {}
     result: dict[str, Any] = {}
     job: JobState = JobState()
+
+
+class CameraFlickerSettings(BaseModel):
+    mode: Literal["driver", "temporal_average", "adaptive", "normal", "driver_50", "driver_60", "shutter_100", "shutter_50", "average_30", "average_90", "row", "hybrid", "adaptive_average"]

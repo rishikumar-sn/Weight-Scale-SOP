@@ -62,4 +62,4 @@ PY
 
 echo "Starting Jewellery Capture at http://127.0.0.1:8000 (Ctrl+C to stop)."
 # Keep run.py's graceful shutdown callback and normal lifespan cleanup.
-exec .venv/bin/python run.py
+exec .venv/bin/python scripts/start_linux_backend.py

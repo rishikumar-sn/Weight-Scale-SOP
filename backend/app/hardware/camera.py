@@ -12,6 +12,8 @@ import cv2
 import numpy as np
 
 from .exposure import ExposureController
+from .adaptive import AdaptiveCameraPipeline
+from .anti_flicker import AntiFlickerPipeline, ShutterController, LinuxPowerLineController, WindowsPowerLineController
 
 
 logger = logging.getLogger(__name__)
@@ -133,6 +135,13 @@ class CameraService:
         self._flicker: FlickerStabilizer | None = None
         self._temporal_average: TemporalFrameAverage | None = None
         self._active_config: dict[str, Any] = {}
+        self._adaptive: AdaptiveCameraPipeline | None = None
+        self._adaptive_status: dict[str, Any] = {}
+        self._method_pipeline = None
+        self._method_status: dict[str, Any] = {}
+        self._powerline = None
+        self._shutter = None
+        self._capture_filter_ready = False
 
     def start(self) -> None:
         with self._lock:
@@ -176,6 +185,7 @@ class CameraService:
         self._reconnect.set()
         with self._preview_ready:
             self._status = "Camera reconnecting"
+            self._capture_filter_ready = False
             self._error = ""
             self._frame = None
             self._frame_time = None
@@ -245,8 +255,14 @@ class CameraService:
                 logger.exception("Could not encode camera preview frame")
 
     def _open(self) -> cv2.VideoCapture:
+        self._capture_filter_ready = False
         config = self._settings_provider()["camera"]
         self._active_config = dict(config)
+        mode = config.get("anti_flicker_mode", "driver")
+        method_mode = mode in {"normal", "driver_50", "driver_60", "shutter_100", "shutter_50", "average_30", "average_90", "row", "hybrid", "adaptive_average"}
+        adaptive_mode = mode == "adaptive"
+        if adaptive_mode and os.name == "nt":
+            raise RuntimeError("Adaptive shutter control currently requires the Linux V4L2 backend")
         index = int(config["index"])
         # CAP_ANY commonly selects DirectShow again on Windows, so it is not a
         # real fallback when a long-running DirectShow session has failed.
@@ -270,23 +286,68 @@ class CameraService:
             raise RuntimeError(
                 f"Could not open camera index {index} using {' or '.join(failures)}"
             )
+        if os.name != "nt":
+            # Negotiate MJPEG before resolution/FPS on V4L2; raw Full HD
+            # otherwise negotiates a low-bandwidth 5 FPS mode.
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, int(config["width"]))
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, int(config["height"]))
         cap.set(cv2.CAP_PROP_FPS, int(config["fps"]))
         # DirectShow renegotiates the format when resolution changes. Select
         # MJPEG last or the BRIO falls back to a roughly 5 FPS Full-HD mode.
-        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        if os.name == "nt":
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        exposure = ExposureController().apply(
+        exposure = {"mode": mode} if method_mode else ExposureController().apply(
             cap,
             index,
             int(config["power_line_hz"]),
             int(config["shutter_denominator"]),
-            bool(config.get("driver_managed_exposure", os.name == "nt")),
+            False if adaptive_mode else bool(config.get("driver_managed_exposure", os.name == "nt")),
+            config.get("linux_image_controls"),
         )
         self._exposure.update(exposure)
-        self._flicker = FlickerStabilizer(config)
-        self._temporal_average = TemporalFrameAverage(int(config.get("temporal_average_frames", 9)))
+        default_mode = "temporal_average" if os.name == "nt" else "driver"
+        driver_mode = config.get("anti_flicker_mode", default_mode) == "driver"
+        filter_config = {**config, "software_anti_flicker": False} if driver_mode or adaptive_mode or method_mode else config
+        self._flicker = FlickerStabilizer(filter_config)
+        frame_count = 1 if driver_mode or adaptive_mode or method_mode else int(config.get("temporal_average_frames", 90))
+        self._temporal_average = TemporalFrameAverage(frame_count)
+        self._adaptive = None
+        self._adaptive_status = {}
+        if adaptive_mode:
+            readback = exposure.get("readback", {})
+            shutter_name = next((name for name in ("exposure_absolute", "exposure_time_absolute") if name in readback), None)
+            if shutter_name is None or not exposure.get("controls", {}).get(shutter_name):
+                cap.release()
+                raise RuntimeError("Adaptive mode requires a working manual V4L2 exposure control")
+
+            def set_exposure(value: int) -> int:
+                if not cap.set(cv2.CAP_PROP_EXPOSURE, value):
+                    raise RuntimeError("Camera rejected adaptive exposure adjustment")
+                actual = int(round(cap.get(cv2.CAP_PROP_EXPOSURE)))
+                if actual != value:
+                    raise RuntimeError(f"Requested exposure {value}, camera read back {actual}")
+                return actual
+
+            limits = exposure.get("exposure_limits", {"min": 5, "max": 2500})
+            maximum = min(int(limits["max"]), max(int(limits["min"]), int(10000 / max(1, int(config["fps"])))))
+            self._adaptive = AdaptiveCameraPipeline(
+                config, self._settings_provider().get("rois", {}).get("processing"),
+                int(readback[shutter_name]), set_exposure, (int(limits["min"]), maximum),
+            )
+            self._adaptive_status = self._adaptive.status()
+            self._exposure["mode"] = "adaptive-manual"
+        self._method_pipeline = None
+        self._method_status = {}
+        if method_mode:
+            self._powerline = (WindowsPowerLineController if os.name == "nt" else LinuxPowerLineController)(index)
+            self._shutter = ShutterController(cap)
+            def update_status(state):
+                with self._lock:
+                    self._method_status = dict(state)
+            self._method_pipeline = AntiFlickerPipeline(self._powerline, update_status, self._shutter)
+            self._method_pipeline.configure("adaptive" if mode == "adaptive_average" else mode, time.monotonic(), force=True)
         fourcc = int(cap.get(cv2.CAP_PROP_FOURCC))
         codec = "".join(chr((fourcc >> (8 * index)) & 0xFF) for index in range(4))
         self._exposure["stream"] = {
@@ -326,6 +387,24 @@ class CameraService:
                         raise CameraReconnectRequested("Camera reconnect requested")
                     if not ok or frame is None:
                         raise RuntimeError("Camera stopped returning frames")
+                    if self._method_pipeline is not None:
+                        frame = self._method_pipeline.process_frame(frame, time.monotonic())
+                    if self._adaptive is not None:
+                        frame = self._adaptive.apply(frame, time.monotonic())
+                        with self._lock:
+                            self._adaptive_status = self._adaptive.status()
+                            units = self._adaptive.exposure
+                            for name in ("exposure_absolute", "exposure_time_absolute"):
+                                if name in self._exposure.get("readback", {}):
+                                    self._exposure = {
+                                        **self._exposure,
+                                        "readback": {**self._exposure["readback"], name: units},
+                                        "requested_controls": {**self._exposure["requested_controls"], name: units},
+                                        "shutter_seconds": units / 10000.,
+                                        "requested_shutter": "adaptive",
+                                    }
+                        if frame is None:
+                            continue
                     if self._flicker is not None:
                         frame = self._flicker.apply(frame)
                     rotation = int(self._active_config["rotation"])
@@ -357,6 +436,12 @@ class CameraService:
                         self._error = str(exc)
                 self._stop.wait(1)
             finally:
+                if self._shutter is not None:
+                    self._shutter.restore()
+                    self._shutter = None
+                if self._powerline is not None:
+                    self._powerline.close()
+                    self._powerline = None
                 if cap is not None:
                     cap.release()
                 with self._lock:
@@ -367,6 +452,17 @@ class CameraService:
 
     def snapshot_frame(self) -> tuple[np.ndarray, dict[str, Any]]:
         with self._lock:
+            if self._reconnect.is_set():
+                raise RuntimeError("Camera settings are being applied. Please wait.")
+            filter_ready = self._capture_ready()
+            if not filter_ready and self._method_pipeline is not None:
+                if self._method_status.get("status") == "UNAVAILABLE":
+                    raise RuntimeError(self._method_status.get("detail") or "Camera flicker method is unavailable.")
+                raise RuntimeError("Camera flicker filter is stabilizing. Please wait.")
+            if not filter_ready and self._adaptive is not None:
+                raise RuntimeError("Camera is adapting to lighting or movement. Please wait a moment and try again.")
+            if not filter_ready:
+                raise RuntimeError("Camera frame average is stabilizing. Please wait.")
             if self._frame is None or self._frame_time is None:
                 raise RuntimeError("Camera frame is not ready")
             frame_age_ms = max(
@@ -386,14 +482,19 @@ class CameraService:
                 "preview_resolution": list(self._preview_resolution),
                 "rotation": int(self._settings_provider()["camera"]["rotation"]),
                 "exposure": dict(self._exposure),
-                "anti_flicker": {
-                    "software_enabled": bool(self._flicker and self._flicker.enabled),
-                    "row_normalize": bool(self._flicker and self._flicker.row_normalize),
-                    "temporal_gain": round(self._flicker.last_gain, 4) if self._flicker else 1.0,
-                    "averaged_frames": self._temporal_average.frame_count if self._temporal_average else 1,
-                    "temporal_method": "exact_rolling_average",
-                },
+                "anti_flicker": self._anti_flicker_status(),
             }
+
+    def _capture_ready(self) -> bool:
+        """Wait for setup once per camera connection, never for scene changes."""
+        if self._reconnect.is_set():
+            return False
+        if not self._capture_filter_ready:
+            state = self._anti_flicker_status()
+            self._capture_filter_ready = (
+                state.get("ready", True) and state.get("adaptive", {}).get("ready", True)
+            )
+        return self._capture_filter_ready
 
     def jpeg(self) -> bytes | None:
         with self._lock:
@@ -447,15 +548,38 @@ class CameraService:
                 "preview_resolution": list(self._preview_resolution),
                 "rotation": int(self._settings_provider()["camera"]["rotation"]),
                 "frame_age_ms": age_ms,
+                "capture_ready": connected and self._capture_ready(),
                 "sequence": self._sequence,
                 "processed_fps": self._processed_fps if connected else 0.0,
                 "stream_fps": self._stream_fps if connected else 0.0,
                 "exposure": dict(self._exposure),
-                "anti_flicker": {
-                    "software_enabled": bool(self._flicker and self._flicker.enabled),
-                    "row_normalize": bool(self._flicker and self._flicker.row_normalize),
-                    "temporal_gain": round(self._flicker.last_gain, 4) if self._flicker else 1.0,
-                    "averaged_frames": self._temporal_average.frame_count if self._temporal_average else 1,
-                    "temporal_method": "exact_rolling_average",
-                },
+                "anti_flicker": self._anti_flicker_status(),
             }
+
+    def _anti_flicker_status(self) -> dict[str, Any]:
+        if self._method_pipeline is not None:
+            return dict(self._method_status)
+        if self._adaptive is not None:
+            state = dict(self._adaptive_status)
+            return {
+                "software_enabled": True,
+                "row_normalize": self._adaptive.row_correction,
+                "temporal_gain": 1.,
+                "averaged_frames": state.get("averaged_frames", 1),
+                "temporal_method": "adaptive_bounded_average",
+                "adaptive": state,
+            }
+        target = self._temporal_average.frame_count if self._temporal_average else 1
+        count = len(self._temporal_average._frames) if target > 1 else 1
+        ready = count >= target
+        return {
+            "software_enabled": bool(self._flicker and self._flicker.enabled),
+            "row_normalize": bool(self._flicker and self._flicker.row_normalize),
+            "temporal_gain": round(self._flicker.last_gain, 4) if self._flicker else 1.,
+            "averaged_frames": count,
+            "target_frames": target,
+            "ready": ready,
+            "status": "READY" if ready else "STABILIZING",
+            "method": f"Saved average {target} frames" if target > 1 else "Current shutter / driver",
+            "temporal_method": "none" if target == 1 else "exact_rolling_average",
+        }

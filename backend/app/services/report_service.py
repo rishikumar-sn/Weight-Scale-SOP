@@ -287,13 +287,23 @@ class ReportService:
         draw.text((x, types_top), "JEWELLERY DETAILS", fill=navy, font=section_font)
         draw.rectangle((x, types_top + px(45), x + px(72), types_top + px(51)), fill=gold)
         item_top = types_top + px(82)
-        item_height = px(104)
         item_gap = px(14)
+        # Fit all jewellery rows into the photograph height where possible.
+        # Keep a readable minimum row height and extend the canvas for larger
+        # captures, instead of dropping jewels when they reach the footer.
+        footer_height = px(325) if self.client_logo.is_file() else padding
+        available_height = image_height - item_top - footer_height
+        item_height = max(px(76), min(px(104),
+            (available_height - (len(labels) - 1) * item_gap) // len(labels)))
+        details_bottom = item_top + len(labels) * item_height + (len(labels) - 1) * item_gap
+        output_height = max(image_height, details_bottom + footer_height)
+        if output_height > image_height:
+            expanded = PillowImage.new("RGB", (image_width + panel_width, output_height), paper)
+            expanded.paste(output, (0, 0))
+            output = expanded
+            draw = ImageDraw.Draw(output)
         for index, label in enumerate(labels, start=1):
             top = item_top + (index - 1) * (item_height + item_gap)
-            logo_zone_top = image_height - px(305)
-            if top + item_height > logo_zone_top - px(20):
-                break
             draw.rounded_rectangle(
                 (x, top, x + available_width, top + item_height),
                 radius=px(16), fill=card, outline=line_color, width=px(2),
@@ -318,7 +328,7 @@ class ReportService:
             draw.text((badge_x + badge_size + px(22), text_y), label, fill=ink, font=type_font)
             if beads_item:
                 bead_count = beads_item.get("count", len(beads_item.get("detections") or []))
-                draw.text((badge_x + badge_size + px(22), top + px(65)), f"Bead count: {bead_count}",
+                draw.text((badge_x + badge_size + px(22), top + item_height - px(39)), f"Bead count: {bead_count}",
                           fill=muted, font=self._result_font(px(22)))
 
         if self.client_logo.is_file():
@@ -326,8 +336,8 @@ class ReportService:
                 logo = ImageOps.exif_transpose(logo_source).convert("RGB")
                 logo.thumbnail((available_width, px(150)), PillowImage.Resampling.LANCZOS)
                 logo_x = image_width + (panel_width - logo.width) // 2
-                logo_y = image_height - px(67) - logo.height
-                divider_y = image_height - px(250)
+                logo_y = output_height - px(67) - logo.height
+                divider_y = output_height - px(250)
                 draw.line((x, divider_y, x + available_width, divider_y), fill=line_color, width=px(2))
                 output.paste(logo, (logo_x, logo_y))
 

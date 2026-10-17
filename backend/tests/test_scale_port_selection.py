@@ -19,7 +19,7 @@ def test_linux_explicit_device_survives_disconnect(configured):
 
 def test_copied_windows_setting_finds_linux_ch340():
     service = ScaleService(lambda: {"scale": {"port": "COM12"}})
-    with patch("serial.tools.list_ports.comports", return_value=[
+    with patch("backend.app.hardware.scale.os", SimpleNamespace(name="posix")), patch("serial.tools.list_ports.comports", return_value=[
         port("/dev/ttyS0"), port("/dev/ttyUSB0", hwid="USB VID:PID=1A86:7523"),
     ]):
         assert service._select_port() == "/dev/ttyUSB0"

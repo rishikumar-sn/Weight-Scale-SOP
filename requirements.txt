@@ -16,3 +16,7 @@ torch==2.13.0+cpu
 transformers>=5.15,<6
 pyyaml>=6,<7
 PyQt5>=5.15,<6
+
+# DirectShow power-line control for selectable camera anti-flicker methods.
+comtypes>=1.4,<2; sys_platform == "win32"
+pygrabber>=0.2,<1; sys_platform == "win32"

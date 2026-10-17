@@ -18,7 +18,7 @@ from .core.config import (
     SESSIONS_DIR,
     SettingsStore,
 )
-from .domain.schemas import ClassificationConfirmation, RoiSettings, TareCaptureRequest
+from .domain.schemas import CameraFlickerSettings, ClassificationConfirmation, RoiSettings, TareCaptureRequest
 from .domain.workflow import class_labels
 from .hardware.camera import CameraService
 from .hardware.scale import ScaleService
@@ -194,13 +194,29 @@ async def live_socket(websocket: WebSocket):
 def get_settings():
     return {
         "settings": settings_store.get(),
+        "platform": settings_store.platform,
         "labels": class_labels(PROJECT_ROOT / "Classification" / "jewelry_prompts.json"),
     }
 
 
+@app.put("/api/settings/camera/flicker")
+def save_camera_flicker(payload: CameraFlickerSettings):
+    import os
+    if payload.mode in {"adaptive", "shutter_100", "shutter_50"} and os.name == "nt":
+        raise HTTPException(status_code=422, detail="Exact shutter controls require Linux V4L2. Select a driver or software method on Windows.")
+    saved = settings_store.update({"camera": {"anti_flicker_mode": payload.mode}})
+    camera.request_reconnect()
+    return {"settings": saved}
+
+
 @app.put("/api/settings/rois")
 def save_rois(payload: RoiSettings):
-    return settings_store.update({"rois": payload.model_dump()})
+    previous = settings_store.get()
+    saved = settings_store.update({"rois": payload.model_dump()})
+    if (saved["camera"].get("anti_flicker_mode") == "adaptive"
+            and saved["rois"].get("processing") != previous["rois"].get("processing")):
+        camera.request_reconnect()
+    return saved
 
 
 @app.post("/api/settings/rois/apriltag/refresh")

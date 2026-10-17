@@ -25,7 +25,6 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .topbar, footer { flex: none; }
 .brandBlock { display: flex; align-items: center; gap: 18px; }
 .companyLogo { width: 74px; height: 58px; object-fit: contain; }
-.clientLogo { width: 140px; height: 64px; object-fit: contain; }
 .topbarActions { display: flex; align-items: center; gap: 18px; }
 .shutdownButton { padding: 9px 13px; border: 1px solid #dfb4b7; border-radius: 9px; background: #fff7f7; color: #9d3038; font-size: 12px; font-weight: 700; cursor: pointer; }
 .shutdownButton:hover { background: #fdebed; }
@@ -198,7 +197,6 @@ footer { padding: 0 64px 18px; text-align: right; color: var(--muted); font-size
 @media (max-height: 800px) and (min-width: 1051px) {
   .topbar { height: 78px; }
   .companyLogo { height: 48px; }
-  .clientLogo { height: 52px; }
   .workspace { grid-template-columns: clamp(280px, calc((100dvh - 235px) * .5625), 350px) minmax(0, 1fr); padding-block: 14px; }
   .stepBody { padding-block: 18px; }
   .captureView { margin-top: 0; }
@@ -217,7 +215,6 @@ footer { padding: 0 64px 18px; text-align: right; color: var(--muted); font-size
   .topbar { height: 74px; padding: 8px 14px; }
   .brandBlock { gap: 9px; min-width: 0; }
   .companyLogo { width: 54px; height: 44px; }
-  .clientLogo { width: 76px; height: 42px; }
   .brandDivider, .brandBlock p { display: none; }
   h1 { font-size: 17px; white-space: nowrap; }
   .workspace { padding: 12px; gap: 12px; }
@@ -246,3 +243,94 @@ footer { padding: 0 64px 18px; text-align: right; color: var(--muted); font-size
 .weightTable th, .weightTable td { padding: 12px; border: 1px solid #d8c7a7; text-align: left; }
 .weightTable thead { background: #f6ebd5; color: #6f4b12; }
 .weightSummary p { font-size: 0.9rem; line-height: 1.5; }
+
+/* Keep the live view fixed while the right panel changes screens. */
+.appShell { height: 100dvh; }
+.workflowPanel { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; }
+.workflowPanel[hidden] { display: none; }
+.cameraHeader { min-height: 58px; height: 58px; flex: none; padding: 0 12px; gap: 8px; font-size: 12px; }
+.cameraTelemetry { display: flex; align-items: center; gap: 9px; min-width: 0; white-space: nowrap; }
+.cameraTelemetry > span:not(.statusDot) { font-size: 10px; letter-spacing: .08em; font-weight: 750; }
+.cameraTelemetry .statusDot { flex: none; width: 7px; height: 7px; }
+.cameraTelemetry .fpsLabel { padding-left: 10px; border-left: 1px solid var(--line); color: var(--muted); letter-spacing: 0; }
+.fpsLabel strong { color: var(--ink); font-size: 13px; font-variant-numeric: tabular-nums; }
+.cameraHeaderActions { gap: 4px; flex: none; }
+.iconButton { width: 36px; height: 36px; flex: none; display: inline-grid; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 10px; background: transparent; color: var(--muted); cursor: pointer; }
+.iconButton:hover { background: #f5f0e6; color: var(--gold-dark); }
+.iconButton.selected { color: var(--gold-dark); background: var(--gold-soft); border-color: #e6d1ae; }
+.iconButton:disabled { opacity: .45; cursor: wait; }
+button:focus-visible, select:focus-visible, a:focus-visible { outline: 3px solid #3e80c4; outline-offset: 3px; }
+.isSpinning svg { animation: reconnectSpin 1s linear infinite; }
+@keyframes reconnectSpin { to { transform: rotate(360deg); } }
+.settingsPanel { display: flex; flex-direction: column; min-height: 0; flex: 1; overflow: hidden; }
+.settingsHeading { display: flex; align-items: center; justify-content: space-between; padding: 22px 26px; border-bottom: 1px solid var(--line); flex: none; }
+.settingsHeading .eyebrow { font-size: 10px; margin-bottom: 4px; }
+.settingsHeading h2 { font-size: 25px; letter-spacing: -.04em; }
+.settingsLayout { display: grid; grid-template-columns: 170px minmax(0, 1fr); min-height: 0; flex: 1; }
+.settingsNav { padding: 18px 12px; border-right: 1px solid var(--line); background: #fbf9f5; display: flex; flex-direction: column; gap: 6px; }
+.settingsNav button { text-align: left; padding: 12px; border: 1px solid transparent; border-radius: 10px; background: transparent; color: var(--muted); font: inherit; font-size: 12px; font-weight: 650; cursor: pointer; }
+.settingsNav button[aria-current] { background: white; color: var(--gold-dark); border-color: #e6d8c1; box-shadow: 0 2px 8px #34270d08; }
+.settingsContent { padding: clamp(18px, 2.5vw, 34px); min-width: 0; overflow-y: auto; overflow-wrap: anywhere; }
+.settingsContent h3 { margin: 0 0 8px; font-size: 21px; }
+.settingsContent p { color: var(--muted); font-size: 13px; line-height: 1.65; margin: 8px 0 20px; }
+.settingsContent label { display: block; margin-bottom: 8px; font-size: 12px; font-weight: 700; }
+.settingsContent select { margin-bottom: 0; }
+.settingsContent .methodDescription { min-height: 44px; margin-top: 10px; }
+.filterStatus { padding: 16px; margin: 20px 0; border: 1px solid var(--line); border-radius: 12px; background: #f8f7f3; display: grid; gap: 7px; font-size: 12px; }
+.filterStatus span { color: var(--muted); line-height: 1.5; }
+.filterStatus .errorText { color: var(--red); }
+.areaOption { padding: 16px; margin: 16px 0; border: 1px solid var(--line); border-radius: 12px; }
+.areaOption strong { font-size: 14px; }
+.areaOption p { margin: 6px 0 12px; }
+.areaOption .textButton { font-size: 12px; white-space: normal; text-align: left; margin-top: 12px; padding: 6px 0; }
+.areaOption button[aria-pressed="true"] { border-color: var(--gold); background: var(--gold-soft); }
+.settingsContent .drawingHint, .settingsContent .settingsNotice { padding: 12px 14px; border-radius: 10px; background: var(--gold-soft); color: var(--gold-dark); }
+.deviceStrip { flex-wrap: wrap; flex: none; }
+.deviceStrip span { min-width: 0; overflow-wrap: anywhere; }
+.deviceStrip .statusDot { flex: none; }
+.messageBar, .errorBar { flex: none; overflow-wrap: anywhere; }
+.confirmationContent { grid-template-columns: minmax(0, .92fr) minmax(0, 1.08fr); }
+.confirmationActions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (min-width: 761px) and (max-width: 1050px) {
+  .appShell { height: 100dvh; overflow: hidden; }
+  .workspace { grid-template-columns: minmax(240px, 32%) minmax(0, 1fr); min-height: 0; overflow: auto; padding-inline: 18px; }
+  .cameraCard { max-width: none; height: 100%; min-height: 300px; }
+  .cameraArea { height: auto; flex: 1; }
+  .controlCard { min-height: 0; }
+  .settingsLayout { grid-template-columns: 130px minmax(0, 1fr); }
+  .settingsNav { padding: 12px 8px; }
+  .settingsNav button { padding: 10px 8px; }
+  .confirmationContent { grid-template-columns: 1fr; }
+  .resultsHeading, .resultsHeadingAside { flex-direction: column; align-items: stretch; }
+  footer { padding: 0 18px 10px; }
+}
+@media (max-width: 760px) {
+  .appShell { height: auto; min-height: 100dvh; overflow: visible; }
+  .workspace { grid-template-columns: 1fr; overflow: visible; }
+  .cameraCard { max-width: none; height: auto; }
+  .cameraArea { height: clamp(240px, 43dvh, 450px); }
+  .settingsPanel { overflow: visible; }
+  .settingsLayout { grid-template-columns: 125px minmax(0, 1fr); }
+  .settingsNav { padding: 12px 8px; }
+  .settingsNav button { padding: 10px 8px; }
+  .settingsHeading { padding: 18px; }
+  .settingsContent { padding: 16px; overflow: visible; }
+  .confirmationContent, .confirmationActions { grid-template-columns: 1fr; }
+  .deviceStrip { flex-direction: row; font-size: 11px; }
+  .topbarActions { gap: 6px; }
+  .shutdownButton { padding: 9px; font-size: 11px; }
+  footer { padding: 12px; text-align: center; }
+}
+@media (max-width: 400px) {
+  .settingsLayout { grid-template-columns: 100px minmax(0, 1fr); }
+  .settingsNav { padding-inline: 5px; }
+  .settingsNav button { font-size: 11px; padding-inline: 6px; }
+  .settingsContent { padding: 12px; }
+  .settingsContent h3 { font-size: 18px; }
+  .brandBlock h1 { font-size: 15px; }
+  .companyLogo { width: 44px; }
+  .primary, .secondary { padding-inline: 10px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}

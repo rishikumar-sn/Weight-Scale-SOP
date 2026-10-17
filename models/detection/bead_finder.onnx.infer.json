@@ -1,0 +1,20 @@
+{
+  "device": "auto",
+  "conf": 0.25,
+  "iou": 0.45,
+  "imgsz": 960,
+  "topk": 5,
+  "labels": [],
+  "normalize": true,
+  "architecture": "resnet50",
+  "classifier_size": 224,
+  "num_classes": 0,
+  "imagenet_normalize": true,
+  "rfdetr_variant": "auto",
+  "fastsam_prompt": "everything",
+  "fastsam_text": "",
+  "retina_masks": true,
+  "text_prompts": "",
+  "adapter": "Auto",
+  "labels_path": ""
+}

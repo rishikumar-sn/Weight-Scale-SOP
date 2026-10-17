@@ -49,16 +49,54 @@ finishes the current request and safely releases the camera, scale, and analysis
 resources before the process exits. The button is disabled while a capture or
 analysis is running. `Ctrl+C` in the backend terminal uses the same cleanup path.
 
-Only one backend process may run because it owns the camera and COM port. On the
-first run, open **Set camera areas** and save both the jewellery and marker areas.
+Only one backend process may run because it owns the camera and COM port. Open
+the camera's **Settings** icon for flicker correction and camera areas. The
+testbed is detected automatically; the marker search and lighting metering areas
+can be drawn and saved while the live preview remains visible.
 
-The live feed is processed in the backend. Its temporal anti-flicker filter uses
-the configured 90-frame rolling average. Preview JPEG encoding runs on a separate
+The live feed is processed in the backend. Windows initially keeps the existing
+90-frame rolling average and driver-managed exposure. Select **Average · 90
+frames**, or another correction method, and click **Apply method** to save it.
+The selected method is restored after shutdown, backend restart or reboot; the
+average warms up with new frames before capture is enabled. This means 90 frames,
+approximately 3 seconds at 30 FPS, rather than a 90-second averaging window.
+Preview JPEG encoding runs on a separate
 thread and discards older pending frames. The camera header shows the preview
 frame rate; `/api/health` reports it as `camera.stream_fps` alongside the camera
 processing rate (`camera.processed_fps`). The live JPEG preview is limited to a
 960 pixel longest side by default, while saved captures retain the camera's full
 resolution.
+
+Lighting setup runs once when a method is applied or the camera reconnects.
+Adaptive methods keep the exposure/filter chosen during that setup; placing
+jewellery or changing lighting does not trigger repeated capture lockouts.
+Click **Apply method** again to recalibrate for different lighting. Fixed methods
+apply their correction without measuring flicker on every frame. Capture still
+requires a connected camera with a current frame and an available scale.
+
+### Windows and Linux hardware settings
+
+Run `scripts/start_backend.ps1` on Windows and `bash startbackend.sh` on Linux.
+The backend selects the hardware profile using the operating system. Settings
+are saved atomically in `data/settings/app.json`, under
+`hardware_profiles.windows` and `hardware_profiles.linux`; each holds its own
+`camera` and `scale` configuration. The original settings migrate automatically
+on first startup, retaining the Windows COM port, averaging and camera settings.
+Older top-level `camera`/`scale` entries are retained for reference; after migration,
+edit the active profile or use the settings panel to change hardware settings.
+Camera areas, analysis settings and AprilTag calibration remain shared.
+
+Linux starts with the developed 50 Hz, fixed 1/100 s camera preset, brightness
+96 and no software averaging. Its scale port defaults to automatic discovery;
+set `hardware_profiles.linux.scale.port` to a persistent `/dev/serial/by-id/...`
+path when required. Linux-only exact/adaptive shutter options appear only on
+Linux. Windows keeps DirectShow with Media Foundation fallback and its existing
+Logitech exposure settings. Changes on one OS do not reset the other OS's saved
+method or serial port.
+
+The developed UI, full-frame bead model input, and result-image layout are
+included. Result images keep every jewellery row, growing vertically when needed
+instead of cutting off entries after the available space is filled.
 
 ## Live classifier model trial
 

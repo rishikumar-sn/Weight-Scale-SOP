@@ -5,6 +5,28 @@ type CaptureTab = "jewellery" | "tare";
 type TareMode = "pledge" | "release";
 type CaptureState = Record<string, any>;
 
+const FLICKER_METHODS = [
+  ["driver", "Current shutter / driver", "Keep the station’s existing calibrated camera settings."],
+  ["adaptive", "Adaptive shutter", "Set exposure and a short average once when applied, then keep those settings until you apply again. Linux V4L2."],
+  ["adaptive_average", "Adaptive filtering", "Check lighting once when applied, then keep raw video or 90-frame averaging until you apply again."],
+  ["normal", "Normal · raw", "Use the camera image without software flicker correction."],
+  ["driver_50", "Driver · 50 Hz", "Ask the camera driver to compensate for 50 Hz lighting."],
+  ["driver_60", "Driver · 60 Hz", "Ask the camera driver to compensate for 60 Hz lighting."],
+  ["shutter_100", "Shutter · 1/100 s", "An exact 10 ms exposure for 50 Hz lighting. Linux V4L2."],
+  ["shutter_50", "Shutter · 1/50 s", "An exact 20 ms exposure for 50 Hz lighting. Linux V4L2."],
+  ["average_30", "Average · 30 frames", "Smooth moving bands over 30 frames. Keep the jewellery still while the filter settles."],
+  ["average_90", "Average · 90 frames", "Stronger smoothing over 90 frames. Moving objects may leave trails while the filter settles."],
+  ["row", "Row correction", "Reduce horizontal brightness bands. This can also change natural shading."],
+  ["hybrid", "Hybrid · average + rows", "Combine 90-frame averaging and horizontal row correction."],
+  ["temporal_average", "Legacy temporal filter", "Use the station’s saved averaging and brightness correction configuration."],
+];
+
+function Icon({ name }: { name: "settings" | "reconnect" | "close" }) {
+  return <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    {name === "reconnect" ? <><path d="M20 7v5h-5"/><path d="M19.1 16a8 8 0 1 1 .4-8L20 12"/></> : name === "close" ? <path d="m6 6 12 12M18 6 6 18"/> : <><path d="m9.5 3-.6 2.4-2 .9-2.2-.7-2 3.4 1.7 1.8v2.4L2.7 15l2 3.4 2.2-.7 2 .9.6 2.4h4.9l.6-2.4 2-.9 2.2.7 2-3.4-1.7-1.8v-2.4l1.7-1.8-2-3.4-2.2.7-2-.9-.6-2.4z"/><circle cx="12" cy="12" r="3"/></>}
+  </svg>;
+}
+
 const COMBINED_NECK_LABEL = "Chain / Necklace";
 const NECK_JEWELLERY_NOTE = "This jewellery type may include necklace, haram, kasu mala, dollar chain, mangalsutra, pendant chain, and similar neck jewellery.";
 const EAR_NOSE_LABEL = "Earrings / Nosepin";
@@ -60,6 +82,7 @@ function ResultImage({ src, alt, label }: { src?: string | null; alt: string; la
 export default function App() {
   const [live, setLive] = useState<any>({ camera: {}, scale: {} });
   const [settings, setSettings] = useState<any>(null);
+  const [hardwarePlatform, setHardwarePlatform] = useState("");
   const [labels, setLabels] = useState<string[]>([]);
   const [active, setActive] = useState<CaptureState | null>(null);
   const [busy, setBusy] = useState(false);
@@ -67,6 +90,15 @@ export default function App() {
   const [message, setMessage] = useState("Place the jewellery and check the weight.");
   const [error, setError] = useState("");
   const [setupOpen, setSetupOpen] = useState(false);
+  const [settingsSection, setSettingsSection] = useState<"flicker" | "areas">("flicker");
+  const [flickerMode, setFlickerMode] = useState("driver");
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsNotice, setSettingsNotice] = useState("");
+  const [drawingTarget, setDrawingTarget] = useState<"processing" | "apriltag" | null>(null);
+  const [draftRois, setDraftRois] = useState<{ processing: Roi | null; apriltag: Roi | null }>({ processing: null, apriltag: null });
+  const dragRef = useRef<{ x: number; y: number; target: "processing" | "apriltag" } | null>(null);
+  const settingsButtonRef = useRef<HTMLButtonElement>(null);
+  const closeSettingsRef = useRef<HTMLButtonElement>(null);
   const [rois, setRois] = useState<{ processing: Roi | null; apriltag: Roi | null }>({
     processing: null,
     apriltag: null,
@@ -136,6 +168,8 @@ export default function App() {
   useEffect(() => {
     requestJson("/api/settings").then((data) => {
       setSettings(data.settings);
+      setHardwarePlatform(data.platform);
+      setFlickerMode(data.settings.camera.anti_flicker_mode);
       setLabels(data.labels || []);
       setRois(data.settings.rois || { processing: null, apriltag: null });
     }).catch((reason) => setError(reason.message));
@@ -154,6 +188,7 @@ export default function App() {
       setRois((current) => ({ ...current, apriltag: data.roi }));
       setError("");
       setMessage(automatic ? "Marker area detected automatically." : "Marker area refreshed.");
+      return data;
     } catch (reason: any) {
       if (!automatic || !rois.apriltag) setError(reason.message);
       if (!automatic) setMessage("Could not refresh the marker area.");
@@ -196,6 +231,7 @@ export default function App() {
         setLive((current: any) => ({
           ...current,
           camera: { ...(current.camera || {}), connected: false },
+          scale: { ...(current.scale || {}), connected: false, weight_g: null },
         }));
         reconnectTimer = window.setTimeout(connectSocket, 1000);
       };
@@ -208,6 +244,7 @@ export default function App() {
         .catch(() => setLive((current: any) => ({
           ...current,
           camera: { ...(current.camera || {}), connected: false },
+          scale: { ...(current.scale || {}), connected: false, weight_g: null },
         })));
     };
 
@@ -269,8 +306,10 @@ export default function App() {
       context.lineWidth = 1;
       context.strokeRect(x, y, width, height);
     };
-    render(rois.apriltag, "#6bc9aa");
-  }, [rois, videoContentRect]);
+    const shown = setupOpen && settingsSection === "areas" ? draftRois : rois;
+    render(shown.apriltag, "#6bc9aa");
+    if (setupOpen && settingsSection === "areas") render(shown.processing, "#edbc63");
+  }, [rois, draftRois, setupOpen, settingsSection, videoContentRect]);
 
   useEffect(() => {
     drawRois();
@@ -282,6 +321,62 @@ export default function App() {
       window.removeEventListener("orientationchange", drawRois);
     };
   }, [drawRois, setupOpen]);
+
+  function toggleSettings() {
+    if (!setupOpen) {
+      setFlickerMode(settings?.camera?.anti_flicker_mode || "driver");
+      setDraftRois(rois);
+      setSettingsNotice("");
+    }
+    setDrawingTarget(null);
+    dragRef.current = null;
+    setSetupOpen(value => !value);
+  }
+
+  useEffect(() => {
+    if (!setupOpen) return;
+    closeSettingsRef.current?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setSetupOpen(false);
+        setDrawingTarget(null);
+        dragRef.current = null;
+        settingsButtonRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [setupOpen]);
+
+  async function saveFlicker() {
+    setSettingsSaving(true);
+    setSettingsNotice("");
+    try {
+      const data = await requestJson("/api/settings/camera/flicker", { method: "PUT", body: JSON.stringify({ mode: flickerMode }) });
+      setSettings(data.settings);
+      setSettingsNotice("Saved. The camera is reconnecting with your selected method.");
+    } catch (reason: any) { setSettingsNotice(`Could not save: ${reason.message}`); }
+    finally { setSettingsSaving(false); }
+  }
+
+  async function saveAreas() {
+    setSettingsSaving(true);
+    try {
+      const data = await requestJson("/api/settings/rois", { method: "PUT", body: JSON.stringify(draftRois) });
+      setSettings(data);
+      setRois(data.rois);
+      setDrawingTarget(null);
+      setSettingsNotice(settings?.camera?.anti_flicker_mode === "adaptive" ? "Camera areas saved. Adaptive metering restarts if its area changed." : "Camera areas saved.");
+    } catch (reason: any) { setSettingsNotice(`Could not save: ${reason.message}`); }
+    finally { setSettingsSaving(false); }
+  }
+
+  function pointerPosition(event: { clientX: number; clientY: number }) {
+    const video = videoContentRect();
+    if (!video || !video.width || !video.height) return null;
+    return { x: Math.max(0, Math.min(1, (event.clientX - video.bounds.left - video.left) / video.width)),
+      y: Math.max(0, Math.min(1, (event.clientY - video.bounds.top - video.top) / video.height)) };
+  }
 
   async function shutdownBackend() {
     if (!window.confirm("Shut down the backend safely? The camera and scale will be disconnected.")) return;
@@ -406,7 +501,7 @@ export default function App() {
     return "capture";
   }, [active]);
 
-  const weight = live.scale?.weight_g;
+  const weight = live.scale?.connected ? live.scale?.weight_g : undefined;
   const result = active?.result || {};
   const media = active?.media || {};
   const detectedItems = active?.classification?.items || [];
@@ -421,10 +516,12 @@ export default function App() {
     && selectedNotGoldItems.length === 0
     && (!hasNotGoldPrediction || notGoldOverride);
   const tareCapture = tareCaptures[tareMode];
+  const cameraAdapting = Boolean(live.camera?.connected && live.camera?.capture_ready === false);
   const cameraReady = Boolean(
     live.camera?.connected
     && typeof live.camera?.frame_age_ms === "number"
     && live.camera.frame_age_ms < 2000
+    && live.camera?.capture_ready !== false
   );
   const liveDate = currentTime.toLocaleDateString("en-IN", {
     day: "2-digit", month: "2-digit", year: "numeric",
@@ -453,21 +550,17 @@ export default function App() {
           >
             {shuttingDown ? "Shutting down..." : "Shut down"}
           </button>
-          <img src="/brand/client" alt="Bank logo" className="clientLogo" />
+
         </div>
       </header>
 
       <main className={`workspace ${setupOpen ? "setupWorkspace" : ""} ${stage === "results" && captureTab === "jewellery" ? "resultsWorkspace" : ""}`}>
-        <section className={`cameraCard ${setupOpen ? "setupOpen" : ""}`}>
+        <section className="cameraCard">
           <div className="cameraHeader">
-            <span><StatusDot ok={cameraReady} /> {cameraReady ? `Camera${live.camera?.stream_fps > 0 ? ` · ${live.camera.stream_fps.toFixed(1)} fps` : ""}` : (live.camera?.status || "Camera unavailable")}</span>
+            <div className="cameraTelemetry"><StatusDot ok={Boolean(live.camera?.connected)} /><span>{live.camera?.connected ? "LIVE" : "OFFLINE"}</span><span className="fpsLabel">FPS <strong>{live.camera?.stream_fps > 0 ? live.camera.stream_fps.toFixed(1) : "—"}</strong></span></div>
             <div className="cameraHeaderActions">
-              <button className="textButton" onClick={reconnectCamera} disabled={cameraReconnecting}>
-                {cameraReconnecting ? "Reconnecting..." : "Reconnect camera"}
-              </button>
-              <button className="textButton" onClick={() => setSetupOpen((value) => !value)}>
-                {setupOpen ? "Close setup" : "Camera setup"}
-              </button>
+              <button className={`iconButton ${cameraReconnecting ? "isSpinning" : ""}`} title="Reconnect camera" aria-label="Reconnect camera" onClick={reconnectCamera} disabled={cameraReconnecting || settingsSaving}><Icon name="reconnect" /></button>
+              <button ref={settingsButtonRef} className={`iconButton ${setupOpen ? "selected" : ""}`} title="Settings" aria-label="Settings" aria-expanded={setupOpen} aria-controls="station-settings" onClick={toggleSettings}><Icon name="settings" /></button>
             </div>
           </div>
           <div
@@ -486,13 +579,30 @@ export default function App() {
             />
             <canvas
               ref={canvasRef}
-              className="roiCanvas"
+              className={`roiCanvas ${setupOpen && settingsSection === "areas" && drawingTarget ? "active" : ""}`}
+              aria-label="Draw camera area"
+              onPointerDown={event => {
+                if (!event.isPrimary || !drawingTarget || !setupOpen || settingsSection !== "areas") return;
+                const point = pointerPosition(event);
+                if (!point) return;
+                dragRef.current = { ...point, target: drawingTarget };
+                event.currentTarget.setPointerCapture(event.pointerId);
+              }}
+              onPointerMove={event => {
+                const start = dragRef.current;
+                const point = pointerPosition(event);
+                if (!start || !point) return;
+                const roi = { x: Math.min(start.x, point.x), y: Math.min(start.y, point.y), width: Math.abs(point.x - start.x), height: Math.abs(point.y - start.y) };
+                if (roi.width > .005 && roi.height > .005) setDraftRois(current => ({ ...current, [start.target]: roi }));
+              }}
+              onPointerUp={event => { dragRef.current = null; if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }}
+              onPointerCancel={() => { dragRef.current = null; }}
             />
             <div className="liveWeightOverlay" aria-label="Live scale weight">
               <span>Live weight</span>
               <strong>{typeof weight === "number" ? weight.toFixed(2) : "--"}<small>g</small></strong>
             </div>
-            {!cameraReady && (
+            {!cameraReady && !cameraAdapting && (
               <div className="cameraUnavailable" role="status">
                 <strong>Camera unavailable</strong>
                 <span>Waiting for automatic reconnection</span>
@@ -502,25 +612,46 @@ export default function App() {
               </div>
             )}
           </div>
-          {setupOpen && (
-            <div className="roiTools">
-              <div>
-                <strong>Automatic testbed area</strong>
-                <p>The segmentation model finds the testbed at capture time. Only the marker area needs refreshing.</p>
-              </div>
-              <button className="textButton" onClick={() => refreshMarkerRoi(false)} disabled={!cameraReady || markerRefreshing}>
-                {markerRefreshing ? "Detecting marker..." : "Refresh marker area"}
-              </button>
-            </div>
-          )}
+
         </section>
 
         <aside className="controlCard">
           <div className="deviceStrip">
-            <span><StatusDot ok={cameraReady} />{cameraReady ? "Camera ready" : "Camera unavailable"}</span>
-            <span><StatusDot ok={Boolean(live.scale?.connected)} />Scale {live.scale?.port || ""}</span>
+            <span><StatusDot ok={cameraReady} />{live.camera?.anti_flicker?.status === "UNAVAILABLE" ? "Method unavailable" : cameraAdapting ? "Adjusting lighting..." : cameraReady ? "Camera ready" : "Camera unavailable"}</span>
+            <span title={live.scale?.error || live.scale?.port || ""}><StatusDot ok={Boolean(live.scale?.connected)} />{live.scale?.connected ? "Scale connected" : live.scale?.status || "Scale reconnecting"}</span>
           </div>
 
+          {setupOpen && <section id="station-settings" className="settingsPanel" aria-label="Station settings">
+            <div className="settingsHeading"><div><span className="eyebrow">Station preferences</span><h2>Settings</h2></div><button ref={closeSettingsRef} className="iconButton" onClick={() => { toggleSettings(); settingsButtonRef.current?.focus(); }} aria-label="Close settings" title="Close settings"><Icon name="close" /></button></div>
+            <div className="settingsLayout">
+              <nav className="settingsNav" aria-label="Settings categories">
+                <button aria-current={settingsSection === "flicker" ? "page" : undefined} onClick={() => { setSettingsSection("flicker"); setDrawingTarget(null); setSettingsNotice(""); }}>Camera flicker</button>
+                <button aria-current={settingsSection === "areas" ? "page" : undefined} onClick={() => { setSettingsSection("areas"); setSettingsNotice(""); }}>Camera areas</button>
+              </nav>
+              <div className="settingsContent">
+                {!settings ? <p role="status">Loading settings…</p> : settingsSection === "flicker" ? <>
+                  <h3>Flicker removal</h3><p>Choose the method that works best with your lighting. Watch the live camera as it settles.</p>
+                  <label htmlFor="flicker-method">Correction method</label>
+                  <select id="flicker-method" value={flickerMode} disabled={settingsSaving} onChange={event => { setFlickerMode(event.target.value); setSettingsNotice(""); }}>{FLICKER_METHODS.filter(([value]) => hardwarePlatform === "linux" || !["adaptive", "shutter_100", "shutter_50"].includes(value)).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+                  <p className="methodDescription">{FLICKER_METHODS.find(([value]) => value === flickerMode)?.[2]}</p>
+                  <div className="filterStatus" role="status"><strong>{live.camera?.anti_flicker?.status === "UNAVAILABLE" ? "Method unavailable" : cameraAdapting ? "Filter settling" : cameraReady ? "Camera ready" : "Waiting for camera"}</strong><span>{live.camera?.anti_flicker?.method || live.camera?.exposure?.requested_shutter || FLICKER_METHODS.find(([value]) => value === settings.camera.anti_flicker_mode)?.[1]}</span>
+                    {live.camera?.anti_flicker?.target_frames > 1 && <span>{live.camera.anti_flicker.averaged_frames} / {live.camera.anti_flicker.target_frames} frames · keep jewellery still</span>}
+                    {(live.camera?.anti_flicker?.detail || live.camera?.anti_flicker?.adaptive?.error || live.camera?.error) && <span className="errorText">{live.camera.anti_flicker?.detail || live.camera.anti_flicker?.adaptive?.error || live.camera.error}</span>}
+                  </div>
+                  <button className="primary" disabled={settingsSaving || (busy || stage === "processing")} onClick={saveFlicker}>{settingsSaving ? "Applying…" : "Apply method"}</button>
+                  {(busy || stage === "processing") && <p>Camera changes are available when the current capture finishes. Analysis continues while settings are open.</p>}
+                </> : <>
+                  <h3>Camera areas</h3><p>The testbed is detected automatically at capture time. Draw a marker search area or a lighting metering area on the live camera.</p>
+                  <div className="areaOption"><strong>Marker search area</strong><p>Include the entire AprilTag with a little space around it.</p><button className="secondary" disabled={settingsSaving || !live.camera?.connected} aria-pressed={drawingTarget === "apriltag"} onClick={() => setDrawingTarget("apriltag")}>Draw marker area</button><button className="textButton" disabled={markerRefreshing || !cameraReady || settingsSaving || busy || stage === "processing"} onClick={async () => { const data = await refreshMarkerRoi(false); if (data) setDraftRois(current => ({ ...current, apriltag: data.roi })); }}>{markerRefreshing ? "Detecting…" : "Auto-detect and save marker"}</button></div>
+                  <div className="areaOption"><strong>Lighting metering area</strong><p>Used by adaptive shutter control. Leave empty to meter the centre of the image.</p><button className="secondary" disabled={settingsSaving || !live.camera?.connected} aria-pressed={drawingTarget === "processing"} onClick={() => setDrawingTarget("processing")}>Draw metering area</button><button className="textButton" disabled={settingsSaving} onClick={() => setDraftRois(current => ({ ...current, processing: null }))}>Use default area</button></div>
+                  {drawingTarget && <p className="drawingHint" role="status">Drag on the live camera to draw the {drawingTarget === "apriltag" ? "marker search" : "lighting metering"} area. Then save your areas.</p>}
+                  <button className="primary" disabled={settingsSaving || busy || stage === "processing"} onClick={saveAreas}>{settingsSaving ? "Saving…" : "Save camera areas"}</button>
+                </>}
+                {settingsNotice && <p className="settingsNotice" role="status">{settingsNotice}</p>}
+              </div>
+            </div>
+          </section>}
+          <div className="workflowPanel" hidden={setupOpen}>
           <div className="captureTabs" role="tablist" aria-label="Capture process">
             <button
               role="tab"
@@ -753,7 +884,8 @@ export default function App() {
             )}
           </div>
 
-          <div className="messageBar">{message}</div>
+          </div>
+          <div className="messageBar" role="status">{message}</div>
           {error && <div className="errorBar">{error}</div>}
         </aside>
       </main>

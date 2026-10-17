@@ -28,12 +28,20 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "preview_max_dimension": 960,
         "power_line_hz": 50,
         "shutter_denominator": 100,
-        "driver_managed_exposure": True,
+        "driver_managed_exposure": os.name == "nt",
+        "linux_image_controls": {},
         "software_anti_flicker": False,
         "anti_flicker_row_normalize": False,
         "anti_flicker_temporal_alpha": 0.08,
         "anti_flicker_gain_limit": 1.35,
-        "temporal_average_frames": 90,
+        "anti_flicker_mode": "temporal_average" if os.name == "nt" else "driver",
+        "temporal_average_frames": 90 if os.name == "nt" else 1,
+        "adaptive": {
+            "target_luma": 190,
+            "max_average_frames": 6,
+            "flicker_threshold": 0.02,
+            "row_correction": True,
+        },
     },
     "scale": {
         "port": "COM12" if os.name == "nt" else "",
@@ -87,31 +95,74 @@ def _merge(base: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def hardware_defaults(platform: str) -> dict[str, Any]:
+    camera = deepcopy(DEFAULT_SETTINGS["camera"])
+    windows = platform == "windows"
+    camera.update({
+        "driver_managed_exposure": windows,
+        "anti_flicker_mode": "temporal_average" if windows else "driver",
+        "temporal_average_frames": 90 if windows else 1,
+        "linux_image_controls": {} if windows else {
+            "brightness": 96, "contrast": 128, "saturation": 128,
+            "gain": 0, "backlight_compensation": 0, "white_balance_automatic": 1,
+        },
+    })
+    return {"camera": camera, "scale": {"port": "COM12" if windows else "", "baud_rate": 9600}}
+
+
 class SettingsStore:
-    def __init__(self, path: Path = SETTINGS_PATH) -> None:
+    def __init__(self, path: Path = SETTINGS_PATH, *, platform: str | None = None) -> None:
         self.path = path
+        self.platform = platform or ("windows" if os.name == "nt" else "linux")
+        if self.platform not in {"windows", "linux"}:
+            raise ValueError("Unsupported hardware platform")
         self._lock = RLock()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-        if not self.path.exists():
-            self._write(DEFAULT_SETTINGS)
+        loaded = self._read()
+        if "hardware_profiles" not in loaded:
+            # Preserve pre-profile camera/serial settings on their original OS.
+            # Port names identify copied installations even on their first run.
+            port = str(loaded.get("scale", {}).get("port", ""))
+            legacy_platform = ("windows" if port.upper().startswith("COM") else
+                               "linux" if port.startswith("/dev/") else self.platform)
+            profiles = {name: hardware_defaults(name) for name in ("windows", "linux")}
+            legacy = {key: loaded[key] for key in ("camera", "scale") if key in loaded}
+            profiles[legacy_platform] = _merge(profiles[legacy_platform], legacy)
+            loaded["hardware_profiles"] = profiles
+            self._write(loaded)
 
     def _write(self, payload: dict[str, Any]) -> None:
         temporary = self.path.with_suffix(".tmp")
         temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         os.replace(temporary, self.path)
 
+    def _read(self) -> dict[str, Any]:
+        try:
+            loaded = json.loads(self.path.read_text(encoding="utf-8"))
+            return loaded if isinstance(loaded, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            return {}
+
     def get(self) -> dict[str, Any]:
         with self._lock:
-            try:
-                loaded = json.loads(self.path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                loaded = {}
-            return _merge(DEFAULT_SETTINGS, loaded)
+            loaded = self._read()
+            result = _merge(DEFAULT_SETTINGS, loaded)
+            profiles = result.pop("hardware_profiles", {})
+            active = _merge(hardware_defaults(self.platform), profiles.get(self.platform, {}))
+            result.update(active)
+            return result
 
     def update(self, changes: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
-            updated = _merge(self.get(), changes)
+            loaded = self._read()
+            hardware = {key: value for key, value in changes.items() if key in {"camera", "scale"}}
+            shared = {key: value for key, value in changes.items()
+                      if key not in {"camera", "scale", "hardware_profiles"}}
+            updated = _merge(loaded, shared)
+            profiles = updated.setdefault("hardware_profiles", {})
+            active = _merge(hardware_defaults(self.platform), profiles.get(self.platform, {}))
+            profiles[self.platform] = _merge(active, hardware)
             self._write(updated)
-            return deepcopy(updated)
+            return self.get()

@@ -5,6 +5,23 @@ Deployment target: Ubuntu 22.04 or 24.04 LTS, 64-bit x86 PC, Python
 and V4L2 for the USB camera. ARM/Raspberry Pi needs separately verified wheels
 and models. Linux hardware operation must be verified on the target machine.
 
+This parent project now contains the Linux developments and Windows support.
+Use `bash startbackend.sh` on Linux and `scripts/start_backend.ps1` on Windows.
+Hardware settings persist separately in `data/settings/app.json` under
+`hardware_profiles.linux` and `hardware_profiles.windows`. See the
+[hardware settings guide](README.md#windows-and-linux-hardware-settings) before
+editing a saved camera or serial setting; older top-level hardware entries are
+retained as migration references, rather than the active configuration.
+
+The Linux default retains the developed 50 Hz, manual 1/100 s shutter and tone
+controls (brightness 96), with a single frame. Apply a flicker method in the
+camera's Settings panel to save a different method across backend restarts.
+Exact/adaptive shutter controls require Linux V4L2. The launcher prepares the
+account's persistent `dialout` membership and activates it for the backend;
+it may request sudo on first use. The serial port starts with automatic
+discovery. Set `hardware_profiles.linux.scale.port` to a persistent
+`/dev/serial/by-id/...` path if multiple USB serial devices are connected.
+
 ## 1. Install system dependencies
 
 Run these commands on the Ubuntu PC:
@@ -218,7 +235,7 @@ Optional automated regression checks (no physical USB devices required):
 
 ```bash
 .venv/bin/python -m pip install pytest
-.venv/bin/python -m pytest backend/tests StoneDetection/test_stone_analysis_v2.py -q
+.venv/bin/python -m pytest tests backend/tests StoneDetection/test_stone_analysis_v2.py -q
 ```
 
 If the camera/scale cannot open, check group membership, device permissions and
