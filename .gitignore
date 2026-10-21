@@ -53,5 +53,5 @@ Thumbs.db
 /data/datasets/
 /data/audits/
 /experiments/
-
+/WeightScaleSOP_UI_Redesign_Kit
 # Generated cache; keep foreign_object_prompts.json because the classifier loads it

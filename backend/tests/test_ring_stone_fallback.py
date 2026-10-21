@@ -42,8 +42,9 @@ def test_hidden_ring_returns_capture_without_invented_measurements(tmp_path):
         assert result["applicable"] is False
         assert result["outer_diameter_mm"] is None
         assert result["inner_diameter_mm"] is None
-        assert result["image"] == str(path)
-        assert np.array_equal(cv2.imread(result["image"]), image)
+        assert result["image"] != str(path)
+        assert cv2.imread(result["image"]).shape[1] == 1536
+        assert np.array_equal(cv2.imread(str(path)), image)
     finally:
         service.shutdown()
 

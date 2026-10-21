@@ -3890,6 +3890,10 @@ def learned_representation_summary(regions: list[dict]) -> list[dict]:
     )
 
 
+STONE_MASK_FILL_ALPHA = 0.52
+STONE_MASK_CONTOUR_PX = 1
+
+
 def render_jewel_outputs(
     roi_bgr: np.ndarray,
     roi_mask: np.ndarray,
@@ -3906,9 +3910,9 @@ def render_jewel_outputs(
         color = stone_green_bgr
         mask = region["mask"]
         contour = region["contour"]
-        blend_mask(overlay, mask, color, alpha=0.22)
+        blend_mask(overlay, mask, color, alpha=STONE_MASK_FILL_ALPHA)
         color_mask_vis[mask > 0] = color
-        cv2.drawContours(overlay, [contour], -1, color, 1)
+        cv2.drawContours(overlay, [contour], -1, color, STONE_MASK_CONTOUR_PX, cv2.LINE_AA)
         cv2.drawContours(color_mask_vis, [contour], -1, (245, 245, 245), 1)
 
     representations = learned_representation_summary(regions)
@@ -4598,52 +4602,47 @@ def gallery_learned_text(learned_representations: list[dict]) -> str:
     return " | ".join(parts)
 
 
-def build_result_gallery(jewel_views: list[dict], summary_fields: list[tuple[str, str]] | None = None) -> np.ndarray:
-    if not jewel_views:
-        canvas = np.full((480, 720, 3), 250, dtype=np.uint8)
-        draw_professional_text(
-            canvas,
-            "No jewelry candidates found",
-            (36, 110),
-            font_size=22,
-            bold=True,
-        )
-        draw_professional_text(
-            canvas,
-            "Load a clearer gold-jewelry image and analyze again",
-            (36, 154),
-            color_bgr=ANNOTATION_MUTED_TEXT_BGR,
-            font_size=15,
-        )
-        return canvas
-
+def build_result_gallery(jewel_views: list[dict], summary_fields: list[tuple[str, str]] | None = None,
+                         *, item_reference: str | None = None) -> np.ndarray:
     import sys
     project_root = str(Path(__file__).resolve().parents[1])
     if project_root not in sys.path:
         sys.path.insert(0, project_root)
-    from backend.app.analysis.annotations import add_side_panel
+    from backend.app.analysis.annotations import add_side_panel, display_crop, identify_result_image
 
-    tile_width, preview_height, margin = 675, 1200, 0
-    tiles = []
+    if not jewel_views:
+        empty = add_side_panel(np.full((820, 820, 3), 255, dtype=np.uint8), "STONE ANALYSIS", [
+            ("RESULT", "No jewellery candidates found"),
+            ("STONE SURFACE AREA", "Unavailable"),
+        ], note="A jewellery region is required to display stone analysis.")
+        return identify_result_image(empty, item_reference)
+
+    tiles, margin = [], 16
     for view in jewel_views:
         source = view["overlay_bgr"]
-        scale = min((tile_width - 32) / source.shape[1], (preview_height - 32) / source.shape[0])
-        preview = cv2.resize(source, (max(1, round(source.shape[1] * scale)),
-                                     max(1, round(source.shape[0] * scale))),
-                             interpolation=cv2.INTER_AREA if scale < 1 else cv2.INTER_CUBIC)
-        ph, pw = preview.shape[:2]
-        body = np.full((preview_height, tile_width, 3), 255, dtype=np.uint8)
-        x, y = (tile_width - pw) // 2, (preview_height - ph) // 2
-        body[y:y + ph, x:x + pw] = preview
-        fields = [("ASSESSMENT", gallery_summary_text(
+        alpha = view.get("masked_bgra")
+        if alpha is not None and alpha.shape[:2] == source.shape[:2]:
+            points = cv2.findNonZero((alpha[:, :, 3] > 0).astype(np.uint8))
+            if points is not None:
+                x, y, w, h = cv2.boundingRect(points)
+                source = display_crop(source, dict(x=x, y=y, w=w, h=h))
+        fields = list(summary_fields) if summary_fields else [("RESULT", gallery_summary_text(
             view["detected_colors"], view.get("reflection"), view.get("stone_status")))]
-        if summary_fields:
-            fields = list(summary_fields)
+        if not any(caption == "STONE SURFACE AREA" for caption, _ in fields):
+            fields.append(("STONE SURFACE AREA", "Unavailable"))
         learned = gallery_learned_text(view.get("learned_representations") or [])
         if learned:
             fields.append(("LEARNED REFERENCES", learned))
-        tiles.append(add_side_panel(body, f"JEWEL {view['jewel_id']} / STONE ANALYSIS", fields))
+        note = ("Accepted stone regions are highlighted in green." if view.get("detected_colors")
+                else "No accepted stone regions to highlight.")
+        tile = add_side_panel(source, "STONE ANALYSIS", fields, note=note)
+        reference = item_reference or f"J{view['jewel_id']}"
+        if item_reference and len(jewel_views) > 1:
+            reference += f" / Region {view['jewel_id']}"
+        tiles.append(identify_result_image(tile, reference))
 
+    if len(tiles) == 1:
+        return tiles[0]
     tile_width = tiles[0].shape[1]
     cols = 1 if len(tiles) == 1 else 2
     row_heights = [max(tile.shape[0] for tile in tiles[i:i + cols])

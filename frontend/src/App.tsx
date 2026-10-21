@@ -70,7 +70,7 @@ function ResultImage({ src, alt, label }: { src?: string | null; alt: string; la
   if (!src) return null;
   return (
     <figure className="resultFigure">
-      <a href={src} target="_blank" rel="noreferrer" title="Open full-size image">
+      <a href={src} target="_blank" rel="noreferrer" title="Open full-size image" aria-label={`${label || alt}: open full-size image in a new tab`}>
         <img className="resultImage" src={src} alt={alt} />
         <span className="imageZoomHint">View full size</span>
       </a>
@@ -89,6 +89,7 @@ export default function App() {
   const [shuttingDown, setShuttingDown] = useState(false);
   const [message, setMessage] = useState("Place the jewellery and check the weight.");
   const [error, setError] = useState("");
+  const [rejectedReview, setRejectedReview] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<"flicker" | "areas">("flicker");
   const [flickerMode, setFlickerMode] = useState("driver");
@@ -395,10 +396,13 @@ export default function App() {
 
   async function capture() {
     setBusy(true);
+    setRejectedReview(false);
+    let capturedId: string | undefined;
     setError("");
     setMessage("Capturing jewellery and weight...");
     try {
       const captured = await requestJson("/api/captures", { method: "POST" });
+      capturedId = captured.id;
       setActive(captured);
       setMessage("Checking the item type...");
       const classified = await requestJson(`/api/captures/${captured.id}/item-type`, { method: "POST" });
@@ -410,6 +414,11 @@ export default function App() {
       setMessage(`Detected ${classified.classification.count || 0} jewel(s). Please confirm each item type.`);
     } catch (reason: any) {
       setError(reason.message);
+      if (capturedId && /non-jewellery object|No separate jewellery item/.test(reason.message || "")) {
+        // Read the display-only rejection evidence; the original gate stays closed.
+        const rejected = await requestJson(`/api/captures/${capturedId}`).catch(() => null);
+        if (rejected) { setActive(rejected); setRejectedReview(true); }
+      }
       setMessage("Ready to try again.");
     } finally {
       setBusy(false);
@@ -486,6 +495,7 @@ export default function App() {
 
   function startNew() {
     setActive(null);
+    setRejectedReview(false);
     setItemCorrections({});
     setNotGoldOverride(false);
     setError("");
@@ -671,6 +681,9 @@ export default function App() {
           <div className="stepBody">
             {captureTab === "jewellery" && stage === "capture" && (
               <div className="captureView">
+                {rejectedReview && <div className="rejectedReview">
+                  <ResultImage src={media.evidence} alt="Capture rejected because jewellery presence was not accepted" label="Image is not proper" />
+                </div>}
                 <span className="eyebrow">Ready to capture</span>
                 <h2>Place one or more jewels</h2>
                 <p>Keep every jewel on the testbed, leave a visible gap between them, and keep the marker clearly visible.</p>

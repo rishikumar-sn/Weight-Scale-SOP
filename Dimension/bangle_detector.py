@@ -1108,10 +1108,7 @@ def draw_results(
     # Reserve space for values even for very small, tightly cropped rings.
     if str(Path(__file__).resolve().parents[1]) not in sys.path:
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from backend.app.analysis.annotations import add_side_panel
-    if out.shape[1] < 520:
-        factor = 520 / out.shape[1]
-        out = cv2.resize(out, (520, round(out.shape[0] * factor)), interpolation=cv2.INTER_CUBIC)
+    from backend.app.analysis.annotations import add_side_panel, display_crop
 
     def measurement(name: str) -> str:
         value = result.get(f"{name}_mm")
@@ -1120,13 +1117,32 @@ def draw_results(
         pixels = result.get(f"{name}_px")
         return f"{pixels:.1f} px (uncalibrated)" if pixels is not None else "Unavailable"
 
+    # Crop only the finished display copy. Fitting, measurement and its input
+    # image have already completed and retain their original coordinate space.
+    bounds = []
+    for circle in (outer, inner):
+        if circle.ellipse is not None:
+            (cx, cy), (axis_a, axis_b), angle = circle.ellipse
+            theta = np.deg2rad(angle)
+            rx = np.hypot(axis_a / 2 * np.cos(theta), axis_b / 2 * np.sin(theta))
+            ry = np.hypot(axis_a / 2 * np.sin(theta), axis_b / 2 * np.cos(theta))
+        else:
+            cx, cy = circle.center
+            rx = ry = circle.radius
+        bounds.append((cx - rx, cy - ry, cx + rx, cy + ry))
+    x, y = min(b[0] for b in bounds), min(b[1] for b in bounds)
+    out = display_crop(out, dict(x=x, y=y, w=max(b[2] for b in bounds) - x,
+                                 h=max(b[3] for b in bounds) - y), padding=.055)
+    geometry_note = ("Diameters are calculated from the fitted ellipse axes."
+                     if outer.ellipse is not None or inner.ellipse is not None else
+                     "Dimensions are measured on the detected outer and inner circular boundaries.")
     out = add_side_panel(out, "DIMENSION ANALYSIS", [
         ("OUTER DIAMETER (OD)", measurement("od")),
         ("INNER DIAMETER (ID)", measurement("id")),
     ], field_colors={
         "OUTER DIAMETER (OD)": tuple(reversed(colors[0])),
         "INNER DIAMETER (ID)": tuple(reversed(colors[1])),
-    })
+    }, note=geometry_note)
 
     return out
 

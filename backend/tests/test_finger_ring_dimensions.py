@@ -57,7 +57,7 @@ def test_app_entry_point_exports_fitted_ellipses(tmp_path):
     # Measurement panel is outside the photograph; small crops are enlarged
     # for readable labels without changing the reported measurement geometry.
     assert annotated.shape[1] > 520
-    assert annotated.shape[0] == round(400 * 520 / 500)
+    assert annotated.shape[0] == 1024
 
 
 @pytest.mark.parametrize('scale', [0, -1, float('nan'), float('inf')])

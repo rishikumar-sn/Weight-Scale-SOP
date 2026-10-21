@@ -17,11 +17,11 @@ def test_side_panel_wraps_values_and_preserves_entire_photo(monkeypatch):
     monkeypatch.setattr(ImageDraw.ImageDraw, "text", track)
     value = "Chain / Necklace, Earrings, Finger Ring, Bangle, Bracelet, Pendant"
     result = add_side_panel(image, "CAPTURE REVIEW", [("JEWELLERY TYPE", value)])
-    assert result.shape[0] == image.shape[0]
-    assert np.array_equal(result[:, :520], image)
+    assert result.shape == (1024, 1536, 3)
+    assert np.array_equal(image, np.full((520, 520, 3), 183, dtype=np.uint8))
     assert len(rendered) > 3  # The value has wrapped instead of shrinking.
     for _, _, box in rendered:
-        assert 0 <= box[0] < box[2] <= result.shape[1] - 520
+        assert 0 <= box[0] < box[2] <= result.shape[1]
         assert 0 <= box[1] < box[3] < result.shape[0]
 
 
@@ -45,10 +45,13 @@ def test_portrait_side_panel_uses_medium_type_at_card_size(monkeypatch):
     result = add_side_panel(photo, "BEAD ANALYSIS", [
         ("DETECTED", "227"), ("TINY", "126"), ("SMALL", "100"), ("LARGE", "1"),
     ])
-    assert result.shape[0] == 1920
-    assert np.array_equal(result[:, :1080], photo)
-    # At the screenshot's ~600px card width, captions and values remain readable.
-    assert min(size for _, size in rendered) * 600 / result.shape[1] >= 14
+    assert result.shape == (1024, 1536, 3)
+    # A portrait source is contained in the landscape display export, not resized
+    # in place. Production callers select the tray/jewel crop on a copy first.
+    assert photo.shape == (1920, 1080, 3)
+    assert np.all(photo == 183)
+    assert min(size for text, size in rendered if text != "i") * 768 / result.shape[1] >= 14
+
 
 
 def test_dimension_labels_keep_mm_and_uncalibrated_px_distinct(monkeypatch):
@@ -68,5 +71,5 @@ def test_dimension_labels_keep_mm_and_uncalibrated_px_distinct(monkeypatch):
     assert "25.05 mm" in texts
     assert "90.0 px (uncalibrated)" in texts
     assert image.shape == (180, 180, 3)
-    assert output.shape[0] == 520
+    assert output.shape[0] == 1024
     assert output.shape[1] > 520

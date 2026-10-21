@@ -15,7 +15,8 @@ import numpy as np
 import onnxruntime as ort
 from PIL import Image
 
-from ..analysis.annotations import add_side_panel, label_box
+from ..analysis.annotations import (add_side_panel, identify_result_image, jewel_reference,
+                                    render_bead_evidence, render_capture_review)
 from ..analysis.beads import analyze_bead_detections, onnx_image_size, prepare_onnx_input
 from ..analysis.vision import separate_jewellery_items
 from ..core.config import PROJECT_ROOT
@@ -266,36 +267,11 @@ class OnnxBeadDetector:
         bead_analysis = analyze_bead_detections(image, detections, measurement_scale)
         beads_detected = bool(detections)
 
-        onnx_annotated = image.copy()
-        annotated = image.copy()
-        # BGR colors: one consistent color per size in both result views.
-        size_colors = {
-            "tiny": (210, 140, 45),
-            "small": (150, 145, 0),
-            "large": (30, 120, 235),
-        }
-        unknown_color = (145, 130, 115)
-        thickness = max(1, round(min(height, width) / 750))
-        for detection in detections:
-            x1, y1, x2, y2 = detection["bbox"]
-            color = size_colors.get(detection.get("size_category"), unknown_color)
-            for canvas in (annotated, onnx_annotated):
-                cv2.rectangle(canvas, (x1, y1), (x2, y2), color, thickness, cv2.LINE_AA)
+        # Rendering happens only after inference, NMS and size analysis finish.
+        annotated = render_bead_evidence(image, detections, bead_analysis, detection_region)
+        onnx_annotated = render_bead_evidence(image, detections, bead_analysis, detection_region,
+                                             title="BEAD DETECTION")
         bead_status = "Beads detected" if beads_detected else "Beads not detected"
-        size_counts = bead_analysis["size"].get("counts") or {}
-        fields = [("DETECTED", str(len(detections)))]
-        legend = {name.upper(): tuple(reversed(color)) for name, color in size_colors.items()}
-        if bead_analysis["size"].get("available"):
-            fields.extend((name.upper(), str(size_counts.get(name, 0)))
-                          for name in ("tiny", "small", "large"))
-        elif detections:
-            fields.extend([
-                ("UNCLASSIFIED SIZE", str(len(detections))),
-                ("ARRANGEMENT", bead_analysis["arrangement"]["description"]),
-            ])
-            legend["UNCLASSIFIED SIZE"] = tuple(reversed(unknown_color))
-        annotated = add_side_panel(annotated, "BEAD ANALYSIS", fields, field_colors=legend)
-        onnx_annotated = add_side_panel(onnx_annotated, "BEAD DETECTION", fields, field_colors=legend)
         return {
             "found": beads_detected,
             "beads_detected": beads_detected,
@@ -408,6 +384,7 @@ class AnalysisService:
             padding_px=int(settings.get("padding_px", 18)),
         )
         if not separated:
+            self._save_rejected_review(state)
             raise RuntimeError(
                 "No separate jewellery item was found. Keep every jewel fully inside the jewellery area, "
                 "leave a visible gap between items, and capture again."
@@ -434,6 +411,7 @@ class AnalysisService:
                 Image.fromarray(raw_crop_rgb)
             )
             if foreign_object:
+                self._save_rejected_review(state)
                 raise RuntimeError(
                     "A non-jewellery object was detected in the jewellery area. "
                     "Remove phones, boxes, cases, tools, and other foreign objects, "
@@ -445,6 +423,7 @@ class AnalysisService:
                 "obvious_non_gold_color",
                 "strong_non_jewelry",
             }:
+                self._save_rejected_review(state)
                 raise RuntimeError(
                     "A non-jewellery object was detected in the jewellery area. "
                     "Remove phones, boxes, tools, and other foreign objects, then recapture."
@@ -640,6 +619,25 @@ class AnalysisService:
         self._executor.submit(self._run, capture_id)
         return state
 
+    def _save_rejected_review(self, state: dict[str, Any]) -> None:
+        """Best-effort display of an existing rejection; never change its gate."""
+        original = (state.get("paths") or {}).get("original")
+        if not original:
+            return
+        try:
+            photo = cv2.imread(str(original))
+            if photo is None:
+                return
+            rendered = render_capture_review(photo, state, [], rejected=True)
+            path = self.repository.session_dir(state["id"]) / "capture" / "classified_evidence.jpg"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if cv2.imwrite(str(path), rendered):
+                state["paths"]["evidence"] = str(path)
+                self.repository.save(state)
+        except Exception:  # Display failures must never replace the existing rejection.
+            # An export failure must not replace or bypass the original rejection.
+            return
+
     def _save_classified_evidence(
         self,
         state: dict[str, Any],
@@ -650,26 +648,7 @@ class AnalysisService:
         image = cv2.imread(state["paths"]["original"])
         if image is None:
             raise RuntimeError("The original captured image is unavailable")
-        processing_roi = (state.get("rois") or {}).get("processing")
-        offset_x = int((processing_roi or {}).get("x", 0))
-        offset_y = int((processing_roi or {}).get("y", 0))
-        labels: list[str] = []
-        occupied: list = []
-        for item in items:
-            bbox = item["bbox"]
-            x1 = int(bbox["x"]) + offset_x
-            y1 = int(bbox["y"]) + offset_y
-            label = str(item.get("confirmed_label") if confirmed else item.get("predicted_label"))
-            labels.append(label)
-            label_box(image, (x1, y1, x1 + int(bbox["w"]), y1 + int(bbox["h"])),
-                      f"Jewel {item['index']}  |  {label}", occupied=occupied)
-        captured_at = datetime.fromisoformat(str(state["captured_at"]))
-        weight = state.get("weight_g")
-        image = add_side_panel(image, "CAPTURE CONFIRMATION" if confirmed else "CAPTURE REVIEW", [
-            ("JEWELLERY TYPE", ", ".join(labels)),
-            ("CAPTURED WEIGHT", f"{float(weight):.2f} g" if weight is not None else "Unavailable"),
-            ("DATE & TIME", captured_at.strftime("%d-%m-%Y  %I:%M:%S %p")),
-        ])
+        image = render_capture_review(image, state, items, confirmed=confirmed)
         path = self.repository.session_dir(state["id"]) / "capture" / "classified_evidence.jpg"
         if not cv2.imwrite(str(path), image):
             raise RuntimeError("Could not save the classified capture image")
@@ -727,6 +706,18 @@ class AnalysisService:
         suffix = f"item_{int(item['index']):02d}" if item else "dimensions"
 
         def unavailable(reason: str) -> dict[str, Any]:
+            photo = cv2.imread(paths["working"])
+            display_path = paths["working"]
+            if photo is not None:
+                preview = add_side_panel(photo, "DIMENSION ANALYSIS", [
+                    ("OUTER DIAMETER (OD)", "Unavailable"),
+                    ("INNER DIAMETER (ID)", "Unavailable"),
+                ], note=reason)
+                preview = identify_result_image(preview, jewel_reference(item))
+                output = self.repository.session_dir(state["id"]) / "results" / "dimensions" / f"{suffix}.png"
+                output.parent.mkdir(parents=True, exist_ok=True)
+                if cv2.imwrite(str(output), preview):
+                    display_path = str(output)
             return {
                 "applicable": False,
                 "status": "unavailable",
@@ -734,7 +725,7 @@ class AnalysisService:
                 "outer_diameter_mm": None,
                 "inner_diameter_mm": None,
                 "thickness_mm": None,
-                "image": paths["working"],
+                "image": display_path,
             }
 
         if label == "Finger Ring" and not (calibration.get("available") and calibration.get("found")):
@@ -755,6 +746,7 @@ class AnalysisService:
         output.parent.mkdir(parents=True, exist_ok=True)
         annotated = cv2.imread(str(result["annotated_path"]))
         if annotated is not None:
+            annotated = identify_result_image(annotated, jewel_reference(item))
             cv2.imwrite(str(output), annotated)
         return {
             "applicable": True,
@@ -810,6 +802,8 @@ class AnalysisService:
         path = self.repository.session_dir(state["id"]) / "results" / "beads" / f"{suffix}.png"
         onnx_path = self.repository.session_dir(state["id"]) / "results" / "beads" / f"{suffix}_onnx.png"
         path.parent.mkdir(parents=True, exist_ok=True)
+        annotated = identify_result_image(annotated, jewel_reference(item))
+        onnx_annotated = identify_result_image(onnx_annotated, jewel_reference(item))
         cv2.imwrite(str(path), annotated)
         cv2.imwrite(str(onnx_path), onnx_annotated)
         result["image"] = str(path)
@@ -901,7 +895,7 @@ class AnalysisService:
         gallery = stone_detection.build_result_gallery(analysis["jewel_views"], summary_fields=[
             ("RESULT", str(risk.get("status") or "No stones")),
             ("STONE SURFACE AREA", area_text),
-        ])
+        ], item_reference=jewel_reference(item))
         cv2.imwrite(str(gallery_path), gallery)
         report_path = self._save_json(
             output_dir / "result.json",
