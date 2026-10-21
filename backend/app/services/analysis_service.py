@@ -35,7 +35,9 @@ for module_path in (
     if str(module_path) not in sys.path:
         sys.path.insert(0, str(module_path))
 
-from Classification.jewelry_classifier import JewelryZeroShotClassifier  # noqa: E402
+from Classification.jewelry_classifier import (  # noqa: E402
+    JewelryZeroShotClassifier, NOT_GOLD_LABEL, PredictionResult,
+)
 from Classification.siglip384_classifier import Siglip384Classifier  # noqa: E402
 from Dimension.bangle_detector import detect_bangle  # noqa: E402
 from Dimension.finger_ring_detector import RingDimensionsUnavailable  # noqa: E402
@@ -384,7 +386,6 @@ class AnalysisService:
             padding_px=int(settings.get("padding_px", 18)),
         )
         if not separated:
-            self._save_rejected_review(state)
             raise RuntimeError(
                 "No separate jewellery item was found. Keep every jewel fully inside the jewellery area, "
                 "leave a visible gap between items, and capture again."
@@ -411,23 +412,19 @@ class AnalysisService:
                 Image.fromarray(raw_crop_rgb)
             )
             if foreign_object:
-                self._save_rejected_review(state)
-                raise RuntimeError(
-                    "A non-jewellery object was detected in the jewellery area. "
-                    "Remove phones, boxes, cases, tools, and other foreign objects, "
-                    "then recapture."
+                # Keep the raw-image eliminator's decision, but finish checking
+                # the other separated objects so mixed captures can be reviewed.
+                raw_image = Image.fromarray(raw_crop_rgb)
+                prediction = PredictionResult(
+                    label=NOT_GOLD_LABEL, confidence=1.0, scores=[],
+                    image_path=str(crop_path), original_image=raw_image,
+                    cropped_image=raw_image, is_gold_jewelry=False,
+                    gold_verification_reason=semantic_reason,
+                    decision_source="strong_non_jewelry",
                 )
-            crop_rgb = cv2.cvtColor(separated_item["crop_bgr"], cv2.COLOR_BGR2RGB)
-            prediction = classifier.classify_image(Image.fromarray(crop_rgb), image_path=str(crop_path))
-            if prediction.decision_source in {
-                "obvious_non_gold_color",
-                "strong_non_jewelry",
-            }:
-                self._save_rejected_review(state)
-                raise RuntimeError(
-                    "A non-jewellery object was detected in the jewellery area. "
-                    "Remove phones, boxes, tools, and other foreign objects, then recapture."
-                )
+            else:
+                crop_rgb = cv2.cvtColor(separated_item["crop_bgr"], cv2.COLOR_BGR2RGB)
+                prediction = classifier.classify_image(Image.fromarray(crop_rgb), image_path=str(crop_path))
             predicted_label, dimension_fallback = _ring_bangle_dimension_fallback(
                 prediction.label,
                 separated_item["mask"],
@@ -473,6 +470,12 @@ class AnalysisService:
             })
 
         predicted_labels = [str(item["predicted_label"]) for item in classified_items]
+        if all(route_for_label(label)["key"] == "no_analysis" for label in predicted_labels):
+            raise RuntimeError(
+                "No gold jewellery was detected; the capture contains only background or a "
+                "non-jewellery object. Remove foreign objects, place gold jewellery on the "
+                "testbed, and recapture."
+            )
         state["classification"] = {
             # These aggregate fields keep old clients and reports readable.
             "model_id": getattr(classifier, "text_model_id", ""),
@@ -531,6 +534,14 @@ class AnalysisService:
             ).strip()
             if not confirmed_label:
                 raise RuntimeError(f"Choose an item type for jewel {item['index']}")
+            if (
+                route_for_label(str(item.get("predicted_label") or ""))["key"] == "no_analysis"
+                and route_for_label(confirmed_label)["key"] != "no_analysis"
+            ):
+                raise RuntimeError(
+                    f"Jewel {item['index']} was classified as Not Gold Jewelry and cannot be overwritten. "
+                    "Remove the object and recapture."
+                )
             should_learn = bool((confirmation or {}).get("learn", learn))
             pending_confirmations.append(
                 (item, confirmed_label, should_learn, route_for_label(confirmed_label))
@@ -550,21 +561,21 @@ class AnalysisService:
             jewels = ", ".join(str(index) for index in rejected_confirmations)
             raise RuntimeError(
                 f"Jewel(s) {jewels} are confirmed as Not Gold Jewelry. "
-                "Recapture, or select the correct gold jewellery type before confirming an override."
+                "Remove the object and recapture."
             )
-        if rejected_predictions and not override_not_gold and not save_only:
+        if rejected_predictions and not save_only:
             jewels = ", ".join(str(index) for index in rejected_predictions)
             raise RuntimeError(
                 f"Jewel(s) {jewels} were classified as Not Gold Jewelry. "
-                "Detailed analysis is blocked; recapture, or explicitly confirm an operator override."
+                "Detailed analysis is blocked; remove the object and recapture."
             )
 
         confirmed_labels: list[str] = []
         routes: list[dict[str, Any]] = []
         for item, confirmed_label, should_learn, item_route in pending_confirmations:
+            learn_rejection = save_only and item_route["key"] == "no_analysis"
             if (
-                should_learn
-                and confirmed_label != item.get("predicted_label")
+                (learn_rejection or (should_learn and confirmed_label != item.get("predicted_label")))
                 and confirmed_label != item.get("gallery_saved_label")
             ):
                 self._get_classifier().learn_correction(item["paths"]["working"], confirmed_label)

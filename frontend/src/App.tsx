@@ -89,7 +89,6 @@ export default function App() {
   const [shuttingDown, setShuttingDown] = useState(false);
   const [message, setMessage] = useState("Place the jewellery and check the weight.");
   const [error, setError] = useState("");
-  const [rejectedReview, setRejectedReview] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<"flicker" | "areas">("flicker");
   const [flickerMode, setFlickerMode] = useState("driver");
@@ -105,7 +104,6 @@ export default function App() {
     apriltag: null,
   });
   const [itemCorrections, setItemCorrections] = useState<Record<number, string>>({});
-  const [notGoldOverride, setNotGoldOverride] = useState(false);
   const [captureTab, setCaptureTab] = useState<CaptureTab>("jewellery");
   const [tareMode, setTareMode] = useState<TareMode>("pledge");
   const [tareCaptures, setTareCaptures] = useState<Partial<Record<TareMode, CaptureState>>>({});
@@ -396,13 +394,10 @@ export default function App() {
 
   async function capture() {
     setBusy(true);
-    setRejectedReview(false);
-    let capturedId: string | undefined;
     setError("");
     setMessage("Capturing jewellery and weight...");
     try {
       const captured = await requestJson("/api/captures", { method: "POST" });
-      capturedId = captured.id;
       setActive(captured);
       setMessage("Checking the item type...");
       const classified = await requestJson(`/api/captures/${captured.id}/item-type`, { method: "POST" });
@@ -410,16 +405,10 @@ export default function App() {
       setItemCorrections(Object.fromEntries(
         (classified.classification.items || []).map((item: any) => [item.index, item.predicted_label]),
       ));
-      setNotGoldOverride(false);
       setMessage(`Detected ${classified.classification.count || 0} jewel(s). Please confirm each item type.`);
     } catch (reason: any) {
       setError(reason.message);
-      if (capturedId && /non-jewellery object|No separate jewellery item/.test(reason.message || "")) {
-        // Read the display-only rejection evidence; the original gate stays closed.
-        const rejected = await requestJson(`/api/captures/${capturedId}`).catch(() => null);
-        if (rejected) { setActive(rejected); setRejectedReview(true); }
-      }
-      setMessage("Ready to try again.");
+      setMessage("Please recapture after placing gold jewellery on the testbed and removing foreign objects.");
     } finally {
       setBusy(false);
     }
@@ -446,11 +435,11 @@ export default function App() {
 
   function classificationPayload() {
     return {
-      override_not_gold: notGoldOverride,
       items: (active?.classification?.items || []).map((item: any) => ({
         index: item.index,
         label: itemCorrections[item.index] || item.predicted_label,
-        learn: (itemCorrections[item.index] || item.predicted_label) !== item.predicted_label,
+        learn: (itemCorrections[item.index] || item.predicted_label) !== item.predicted_label
+          || String(item.predicted_label).trim().toLowerCase() === "not gold jewelry",
       })),
     };
   }
@@ -495,9 +484,7 @@ export default function App() {
 
   function startNew() {
     setActive(null);
-    setRejectedReview(false);
     setItemCorrections({});
-    setNotGoldOverride(false);
     setError("");
     setMessage("Place the next jewellery item and check the weight.");
   }
@@ -524,7 +511,7 @@ export default function App() {
   const hasNotGoldPrediction = predictedNotGoldItems.length > 0;
   const canConfirmItems = detectedItems.length > 0
     && selectedNotGoldItems.length === 0
-    && (!hasNotGoldPrediction || notGoldOverride);
+    && !hasNotGoldPrediction;
   const tareCapture = tareCaptures[tareMode];
   const cameraAdapting = Boolean(live.camera?.connected && live.camera?.capture_ready === false);
   const cameraReady = Boolean(
@@ -681,9 +668,6 @@ export default function App() {
           <div className="stepBody">
             {captureTab === "jewellery" && stage === "capture" && (
               <div className="captureView">
-                {rejectedReview && <div className="rejectedReview">
-                  <ResultImage src={media.evidence} alt="Capture rejected because jewellery presence was not accepted" label="Image is not proper" />
-                </div>}
                 <span className="eyebrow">Ready to capture</span>
                 <h2>Place one or more jewels</h2>
                 <p>Keep every jewel on the testbed, leave a visible gap between them, and keep the marker clearly visible.</p>
@@ -716,6 +700,7 @@ export default function App() {
                           <select
                             aria-label={`Jewel ${item.index} type`}
                             value={itemCorrections[item.index] || item.predicted_label}
+                            disabled={String(item.predicted_label).trim().toLowerCase() === "not gold jewelry"}
                             onChange={(event) => setItemCorrections((current) => ({ ...current, [item.index]: event.target.value }))}
                           >
                             {labels.map((label) => <option key={label} value={label}>{label}</option>)}
@@ -736,16 +721,8 @@ export default function App() {
                           {predictedNotGoldItems.length === 1
                             ? `Jewel ${predictedNotGoldItems[0].index} was classified as Not Gold Jewelry.`
                             : `Jewels ${predictedNotGoldItems.map((item: any) => item.index).join(", ")} were classified as Not Gold Jewelry.`}
-                          {" "}Recapture after removing the object. If this classification is wrong, select the correct gold jewellery type above and acknowledge the override.
+                          {" "}This classification cannot be overwritten. Remove the object and recapture; its Not Gold label will be saved for gallery matching.
                         </p>
-                        <label>
-                          <input
-                            type="checkbox"
-                            checked={notGoldOverride}
-                            onChange={(event) => setNotGoldOverride(event.target.checked)}
-                          />
-                          I confirm the flagged object is gold jewellery and want to override the classification.
-                        </label>
                       </div>
                     )}
                     <div className="confirmationActions">
@@ -757,12 +734,12 @@ export default function App() {
                         {busy ? "Please wait..." : "Recapture image"}
                       </button>
                       <button className="primary" onClick={confirmItems} disabled={busy || !canConfirmItems}>
-                        {hasNotGoldPrediction ? "Confirm override and analyze" : "Confirm all and analyze"}
+                        Confirm all and analyze
                       </button>
                     </div>
                     <p className="confirmationHint">
                       {selectedNotGoldItems.length
-                        ? "Not Gold Jewelry cannot proceed to analysis. Recapture saves your manual corrections for gallery matching, then takes a new image."
+                        ? "Not Gold Jewelry cannot proceed to analysis. Recapture saves Not Gold labels and your manual corrections for gallery matching, then takes a new image."
                         : "Review every detected jewel before starting the detailed analysis."}
                     </p>
                   </div>

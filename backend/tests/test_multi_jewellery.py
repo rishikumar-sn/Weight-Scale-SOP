@@ -267,9 +267,9 @@ def test_not_gold_prediction_blocks_single_and_multi_item_analysis(monkeypatch, 
     service.shutdown()
 
 
-def test_not_gold_prediction_requires_corrected_label_and_explicit_override(monkeypatch) -> None:
+def test_not_gold_prediction_cannot_be_overridden_or_relearned_as_gold(monkeypatch) -> None:
     item = {"index": 1, "predicted_label": "Not Gold Jewelry", "paths": {"working": "item.png"}}
-    repository = _Repository({"id": "capture-override", "classification": {"items": [item]}, "paths": {}})
+    repository = _Repository({"id": "capture-override", "status": "awaiting_confirmation", "classification": {"items": [item]}, "paths": {}})
     service = AnalysisService(repository)
     monkeypatch.setattr(service, "_save_classified_evidence", lambda *_args, **_kwargs: "evidence.jpg")
     monkeypatch.setattr(service._executor, "submit", lambda *_args, **_kwargs: None)
@@ -283,18 +283,112 @@ def test_not_gold_prediction_requires_corrected_label_and_explicit_override(monk
             override_not_gold=True,
         )
 
-    confirmed = service.confirm_and_start(
-        "capture-override",
-        None,
-        False,
-        [{"index": 1, "label": "Bangle", "learn": False}],
-        override_not_gold=True,
-    )
-
-    assert confirmed["status"] == "processing"
-    assert confirmed["classification"]["not_gold_override"] is True
-    assert confirmed["classification"]["confirmed_label"] == "Bangle"
+    for save_only in (False, True):
+        with pytest.raises(RuntimeError, match="cannot be overwritten"):
+            service.confirm_and_start(
+                "capture-override", None, True,
+                [{"index": 1, "label": "Bangle", "learn": True}],
+                override_not_gold=True, save_only=save_only,
+            )
+    assert repository.state["classification"]["items"] == [item]
     service.shutdown()
+
+
+@pytest.mark.parametrize("foreign_first", [True, False])
+@pytest.mark.parametrize("gate", ["semantic", "hsv"])
+def test_mixed_foreign_and_gold_capture_keeps_preview_and_confirmation(monkeypatch, tmp_path, foreign_first, gate):
+    from Classification.jewelry_classifier import PredictionResult
+
+    working, mask_path = tmp_path / "working.png", tmp_path / "mask.png"
+    cv2.imwrite(str(working), np.full((80, 160, 3), 200, np.uint8))
+    cv2.imwrite(str(mask_path), np.full((80, 160), 255, np.uint8))
+    repository = _Repository({"id": "mixed", "paths": {"working": str(working), "mask": str(mask_path)}})
+    repository.session_dir = lambda _id: tmp_path
+    separated = []
+    for index, foreign in enumerate((foreign_first, not foreign_first)):
+        crop = np.full((50, 50, 3), (0, 0, 255) if foreign else (20, 160, 220), np.uint8)
+        separated.append(dict(bbox={"x": index * 70, "y": 0, "w": 50, "h": 50},
+                              area_px=1000, crop_bgr=crop, raw_crop_bgr=crop,
+                              mask=np.ones((50, 50), np.uint8)))
+
+    class Classifier:
+        def check_non_jewelry(self, image):
+            return gate == "semantic" and bool(np.asarray(image)[0, 0, 0] == 255), "semantic check"
+
+        def classify_image(self, image, image_path):
+            foreign = np.asarray(image)[0, 0, 0] == 255
+            assert not foreign or gate == "hsv"  # The raw eliminator stays authoritative.
+            return PredictionResult(label="Not Gold Jewelry" if foreign else "Bangle",
+                                    confidence=.9, scores=[], image_path=image_path,
+                                    original_image=image, cropped_image=image,
+                                    decision_source="obvious_non_gold_color" if foreign else "siglip")
+
+    service = AnalysisService(repository)
+    monkeypatch.setattr("backend.app.services.analysis_service.separate_jewellery_items", lambda *_a, **_kw: separated)
+    monkeypatch.setattr(service, "_get_classifier", lambda: Classifier())
+    monkeypatch.setattr(service, "_save_classified_evidence", lambda *_a, **_kw: "mixed-preview.jpg")
+    monkeypatch.setattr(service, "_save_rejected_review", lambda *_a: pytest.fail("No rejection preview"))
+    try:
+        state = service.classify("mixed")
+        assert state["status"] == "awaiting_confirmation"
+        assert state["paths"]["evidence"] == "mixed-preview.jpg"
+        assert state["classification"]["labels"] == (["Not Gold Jewelry", "Bangle"] if foreign_first else ["Bangle", "Not Gold Jewelry"])
+    finally:
+        service.shutdown()
+
+
+def test_empty_capture_rejects_without_classifier_or_review(monkeypatch, tmp_path):
+    working, mask_path = tmp_path / "working.png", tmp_path / "mask.png"
+    cv2.imwrite(str(working), np.full((50, 50, 3), 200, np.uint8))
+    cv2.imwrite(str(mask_path), np.zeros((50, 50), np.uint8))
+    repository = _Repository({"id": "empty", "status": "captured",
+                              "paths": {"working": str(working), "mask": str(mask_path)}})
+    service = AnalysisService(repository)
+    monkeypatch.setattr("backend.app.services.analysis_service.separate_jewellery_items", lambda *_a, **_kw: [])
+    monkeypatch.setattr(service, "_get_classifier", lambda: pytest.fail("No object to classify"))
+    monkeypatch.setattr(service, "_save_rejected_review", lambda *_a: pytest.fail("No rejection preview"))
+    try:
+        with pytest.raises(RuntimeError, match="No separate jewellery item"):
+            service.classify("empty")
+        assert repository.state["status"] == "captured"
+    finally:
+        service.shutdown()
+
+
+@pytest.mark.parametrize("decision_source", ["empty_background", "obvious_non_gold_color", "strong_non_jewelry", "gallery"])
+def test_only_not_gold_predictions_reject_without_review(monkeypatch, tmp_path, decision_source):
+    from Classification.jewelry_classifier import PredictionResult
+
+    working, mask_path = tmp_path / "working.png", tmp_path / "mask.png"
+    crop = np.full((50, 50, 3), 200, np.uint8)
+    cv2.imwrite(str(working), crop)
+    cv2.imwrite(str(mask_path), np.full((50, 50), 255, np.uint8))
+    repository = _Repository({"id": "non-gold", "status": "captured",
+                              "paths": {"working": str(working), "mask": str(mask_path)}})
+    repository.session_dir = lambda _id: tmp_path
+    separated = dict(bbox={"x": 0, "y": 0, "w": 50, "h": 50}, area_px=1000,
+                     crop_bgr=crop, raw_crop_bgr=crop, mask=np.ones((50, 50), np.uint8))
+
+    class Classifier:
+        def check_non_jewelry(self, _image):
+            return False, "semantic check"
+
+        def classify_image(self, image, image_path):
+            return PredictionResult(label="Not Gold Jewelry", confidence=.9, scores=[], image_path=image_path,
+                                    original_image=image, cropped_image=image, decision_source=decision_source)
+
+    service = AnalysisService(repository)
+    monkeypatch.setattr("backend.app.services.analysis_service.separate_jewellery_items", lambda *_a, **_kw: [separated])
+    monkeypatch.setattr(service, "_get_classifier", lambda: Classifier())
+    monkeypatch.setattr(service, "_save_classified_evidence", lambda *_a, **_kw: pytest.fail("No classified preview"))
+    monkeypatch.setattr(service, "_save_rejected_review", lambda *_a: pytest.fail("No rejection preview"))
+    try:
+        with pytest.raises(RuntimeError, match="recapture"):
+            service.classify("non-gold")
+        assert repository.state["status"] == "captured"
+        assert "classification" not in repository.state
+    finally:
+        service.shutdown()
 
 
 def test_each_bangle_and_earring_is_analyzed_independently(monkeypatch) -> None:
@@ -370,6 +464,34 @@ def test_recapture_saves_corrections_without_starting_analysis(monkeypatch, sele
     assert saved["classification"]["items"][0]["correction_label"] == selected_label
     assert not saved["classification"].get("confirmed")
     service.shutdown()
+
+
+def test_recapture_learns_unchanged_not_gold_once_without_starting_analysis(monkeypatch):
+    repository = _Repository({
+        "id": "mixed-recapture", "status": "awaiting_confirmation", "paths": {},
+        "classification": {"items": [
+            {"index": 1, "predicted_label": "Bangle", "paths": {"working": "gold.png"}},
+            {"index": 2, "predicted_label": "Not Gold Jewelry", "paths": {"working": "foreign.png"}},
+        ]},
+    })
+    service = AnalysisService(repository)
+    learned = []
+    classifier = type("Classifier", (), {
+        "learn_correction": lambda _self, path, label: learned.append((path, label)),
+    })()
+    monkeypatch.setattr(service, "_get_classifier", lambda: classifier)
+    monkeypatch.setattr(service._executor, "submit", lambda *_a, **_kw: pytest.fail("Analysis must not start"))
+    try:
+        for _ in range(2):
+            state = service.confirm_and_start("mixed-recapture", None, False, [
+                {"index": 1, "label": "Bangle", "learn": False},
+                {"index": 2, "label": "Not Gold Jewelry", "learn": False},
+            ], save_only=True)
+        assert learned == [("foreign.png", "Not Gold Jewelry")]
+        assert state["status"] == "awaiting_confirmation"
+        assert state["classification"]["items"][1]["gallery_saved_label"] == "Not Gold Jewelry"
+    finally:
+        service.shutdown()
 
 
 def test_confirm_saves_manual_correction_for_gallery(monkeypatch) -> None:
