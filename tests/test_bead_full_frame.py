@@ -74,7 +74,11 @@ class BeadFullFrameTests(unittest.TestCase):
         for result in results:
             self.assertEqual(result["input_source"], "full_frame")
             self.assertEqual(result["coordinate_space"], "full_frame")
-            self.assertEqual(cv2.imread(result["image"]).shape, self.image.shape)
+            annotated = cv2.imread(result["image"])
+            # Inference and detections retain full-frame coordinates while
+            # the exported evidence adds a panel beside the photograph.
+            self.assertEqual(annotated.shape[0], self.image.shape[0])
+            self.assertGreater(annotated.shape[1], self.image.shape[1])
             self.assertTrue(Path(result["onnx_image"]).is_file())
 
     def test_without_item_only_accepts_predictions_inside_testbed_polygon(self):

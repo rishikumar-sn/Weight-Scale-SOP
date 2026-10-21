@@ -3901,12 +3901,12 @@ def render_jewel_outputs(
 
     overlay = masked_preview.copy()
     color_mask_vis = np.full_like(roi_bgr, 20)
-    stone_green_bgr = (0, 210, 0)
+    stone_green_bgr = (118, 155, 36)
     for region in regions:
         color = stone_green_bgr
         mask = region["mask"]
         contour = region["contour"]
-        blend_mask(overlay, mask, color, alpha=0.52)
+        blend_mask(overlay, mask, color, alpha=0.22)
         color_mask_vis[mask > 0] = color
         cv2.drawContours(overlay, [contour], -1, color, 1)
         cv2.drawContours(color_mask_vis, [contour], -1, (245, 245, 245), 1)
@@ -3934,8 +3934,8 @@ def render_jewel_outputs(
             f"L{representation_index}",
             (x, max(0, y - 16)),
             color_bgr=ANNOTATION_TEXT_BGR,
-            font_size=9,
-            bold=True,
+            font_size=13,
+            bold=False,
             background_bgr=ANNOTATION_CARD_BGR,
             border_bgr=color,
             padding=(3, 2),
@@ -4598,7 +4598,7 @@ def gallery_learned_text(learned_representations: list[dict]) -> str:
     return " | ".join(parts)
 
 
-def build_result_gallery(jewel_views: list[dict]) -> np.ndarray:
+def build_result_gallery(jewel_views: list[dict], summary_fields: list[tuple[str, str]] | None = None) -> np.ndarray:
     if not jewel_views:
         canvas = np.full((480, 720, 3), 250, dtype=np.uint8)
         draw_professional_text(
@@ -4617,65 +4617,45 @@ def build_result_gallery(jewel_views: list[dict]) -> np.ndarray:
         )
         return canvas
 
-    cols = 1 if len(jewel_views) == 1 else 2
-    rows = (len(jewel_views) + cols - 1) // cols
-    tile_width = 520
-    tile_height = 360
-    margin = 24
-    header_height = 76
+    import sys
+    project_root = str(Path(__file__).resolve().parents[1])
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+    from backend.app.analysis.annotations import add_side_panel
 
-    canvas_height = margin + rows * (header_height + tile_height + margin)
-    canvas_width = margin + cols * (tile_width + margin)
-    canvas = np.full((canvas_height, canvas_width, 3), 248, dtype=np.uint8)
-
-    for idx, jewel_view in enumerate(jewel_views):
-        row = idx // cols
-        col = idx % cols
-        x0 = margin + col * (tile_width + margin)
-        y0 = margin + row * (header_height + tile_height + margin)
-
-        cv2.rectangle(
-            canvas,
-            (x0, y0),
-            (x0 + tile_width, y0 + header_height + tile_height),
-            ANNOTATION_BORDER_BGR,
-            1,
-        )
-        draw_professional_text(
-            canvas,
-            f"Jewel {jewel_view['jewel_id']}",
-            (x0 + 14, y0 + 8),
-            font_size=17,
-            bold=True,
-        )
-        draw_professional_text(
-            canvas,
-            gallery_summary_text(
-                jewel_view["detected_colors"],
-                jewel_view.get("reflection"),
-                jewel_view.get("stone_status"),
-            ),
-            (x0 + 14, y0 + 33),
-            color_bgr=ANNOTATION_MUTED_TEXT_BGR,
-            font_size=13,
-        )
-        learned_text = gallery_learned_text(
-            jewel_view.get("learned_representations") or []
-        )
-        if learned_text:
-            draw_professional_text(
-                canvas,
-                learned_text,
-                (x0 + 14, y0 + 54),
-                color_bgr=ANNOTATION_MUTED_TEXT_BGR,
-                font_size=10,
-            )
-
-        preview = resize_to_fit(jewel_view["overlay_bgr"], tile_width - 20, tile_height - 20)
+    tile_width, preview_height, margin = 675, 1200, 0
+    tiles = []
+    for view in jewel_views:
+        source = view["overlay_bgr"]
+        scale = min((tile_width - 32) / source.shape[1], (preview_height - 32) / source.shape[0])
+        preview = cv2.resize(source, (max(1, round(source.shape[1] * scale)),
+                                     max(1, round(source.shape[0] * scale))),
+                             interpolation=cv2.INTER_AREA if scale < 1 else cv2.INTER_CUBIC)
         ph, pw = preview.shape[:2]
-        px = x0 + (tile_width - pw) // 2
-        py = y0 + header_height + (tile_height - ph) // 2
-        canvas[py:py + ph, px:px + pw] = preview
+        body = np.full((preview_height, tile_width, 3), 255, dtype=np.uint8)
+        x, y = (tile_width - pw) // 2, (preview_height - ph) // 2
+        body[y:y + ph, x:x + pw] = preview
+        fields = [("ASSESSMENT", gallery_summary_text(
+            view["detected_colors"], view.get("reflection"), view.get("stone_status")))]
+        if summary_fields:
+            fields = list(summary_fields)
+        learned = gallery_learned_text(view.get("learned_representations") or [])
+        if learned:
+            fields.append(("LEARNED REFERENCES", learned))
+        tiles.append(add_side_panel(body, f"JEWEL {view['jewel_id']} / STONE ANALYSIS", fields))
+
+    tile_width = tiles[0].shape[1]
+    cols = 1 if len(tiles) == 1 else 2
+    row_heights = [max(tile.shape[0] for tile in tiles[i:i + cols])
+                   for i in range(0, len(tiles), cols)]
+    canvas = np.full((sum(row_heights) + margin * (len(row_heights) + 1),
+                      cols * tile_width + margin * (cols + 1), 3), 244, dtype=np.uint8)
+    top = margin
+    for row, row_height in enumerate(row_heights):
+        for col, tile in enumerate(tiles[row * cols:(row + 1) * cols]):
+            left = margin + col * (tile_width + margin)
+            canvas[top:top + tile.shape[0], left:left + tile_width] = tile
+        top += row_height + margin
 
     return canvas
 

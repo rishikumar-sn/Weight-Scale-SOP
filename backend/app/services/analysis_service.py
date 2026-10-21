@@ -15,6 +15,7 @@ import numpy as np
 import onnxruntime as ort
 from PIL import Image
 
+from ..analysis.annotations import add_side_panel, label_box
 from ..analysis.beads import analyze_bead_detections, onnx_image_size, prepare_onnx_input
 from ..analysis.vision import separate_jewellery_items
 from ..core.config import PROJECT_ROOT
@@ -266,71 +267,35 @@ class OnnxBeadDetector:
         beads_detected = bool(detections)
 
         onnx_annotated = image.copy()
-        for number, candidate in enumerate(candidates, start=1):
-            x1, y1, x2, y2 = candidate["bbox"]
-            cv2.rectangle(onnx_annotated, (x1, y1), (x2, y2), (0, 155, 255), 3, cv2.LINE_AA)
-            cv2.putText(
-                onnx_annotated,
-                str(number),
-                (x1, max(24, y1 - 7)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 155, 255),
-                2,
-                cv2.LINE_AA,
-            )
-        onnx_header_width = min(width - 10, 330)
-        cv2.rectangle(onnx_annotated, (10, 10), (onnx_header_width, 56), (18, 24, 32), -1)
-        cv2.putText(
-            onnx_annotated,
-            f"ONNX candidates: {len(candidates)}",
-            (20, 43),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
-            (255, 255, 255),
-            2,
-            cv2.LINE_AA,
-        )
         annotated = image.copy()
+        # BGR colors: one consistent color per size in both result views.
+        size_colors = {
+            "tiny": (210, 140, 45),
+            "small": (150, 145, 0),
+            "large": (30, 120, 235),
+        }
+        unknown_color = (145, 130, 115)
+        thickness = max(1, round(min(height, width) / 750))
         for detection in detections:
             x1, y1, x2, y2 = detection["bbox"]
-            category = detection.get("size_category")
-            box_color = {
-                "tiny": (255, 180, 20),
-                "small": (24, 170, 90),
-                "large": (190, 60, 210),
-            }.get(category, (24, 170, 90))
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), box_color, 3, cv2.LINE_AA)
+            color = size_colors.get(detection.get("size_category"), unknown_color)
+            for canvas in (annotated, onnx_annotated):
+                cv2.rectangle(canvas, (x1, y1), (x2, y2), color, thickness, cv2.LINE_AA)
         bead_status = "Beads detected" if beads_detected else "Beads not detected"
         size_counts = bead_analysis["size"].get("counts") or {}
-        detail = (
-            f"Large {size_counts.get('large', 0)}  Small {size_counts.get('small', 0)}  "
-            f"Tiny {size_counts.get('tiny', 0)}"
-            if bead_analysis["size"].get("available") and detections
-            else bead_analysis["arrangement"]["description"]
-        )
-        header_width = min(width - 10, 570)
-        cv2.rectangle(annotated, (10, 10), (header_width, 88), (18, 24, 32), -1)
-        cv2.putText(
-            annotated,
-            f"{bead_status}: {len(detections)}",
-            (20, 42),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.82,
-            (255, 255, 255),
-            2,
-            cv2.LINE_AA,
-        )
-        cv2.putText(
-            annotated,
-            detail,
-            (20, 72),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.62,
-            (210, 220, 230),
-            2,
-            cv2.LINE_AA,
-        )
+        fields = [("DETECTED", str(len(detections)))]
+        legend = {name.upper(): tuple(reversed(color)) for name, color in size_colors.items()}
+        if bead_analysis["size"].get("available"):
+            fields.extend((name.upper(), str(size_counts.get(name, 0)))
+                          for name in ("tiny", "small", "large"))
+        elif detections:
+            fields.extend([
+                ("UNCLASSIFIED SIZE", str(len(detections))),
+                ("ARRANGEMENT", bead_analysis["arrangement"]["description"]),
+            ])
+            legend["UNCLASSIFIED SIZE"] = tuple(reversed(unknown_color))
+        annotated = add_side_panel(annotated, "BEAD ANALYSIS", fields, field_colors=legend)
+        onnx_annotated = add_side_panel(onnx_annotated, "BEAD DETECTION", fields, field_colors=legend)
         return {
             "found": beads_detected,
             "beads_detected": beads_detected,
@@ -688,95 +653,23 @@ class AnalysisService:
         processing_roi = (state.get("rois") or {}).get("processing")
         offset_x = int((processing_roi or {}).get("x", 0))
         offset_y = int((processing_roi or {}).get("y", 0))
-        scale = max(0.65, min(image.shape[:2]) / 900.0)
-        dark = (32, 24, 17)
-        gold = (36, 129, 189)
-        green = (95, 132, 22)
-        white = (255, 255, 255)
-
-        def fitted_font(text: str, maximum_width: int, preferred: float, thickness: int) -> float:
-            font_size = preferred
-            text_width = cv2.getTextSize(
-                text, cv2.FONT_HERSHEY_SIMPLEX, font_size, thickness
-            )[0][0]
-            if text_width > maximum_width:
-                font_size *= max(0.45, maximum_width / max(1, text_width))
-            return font_size
-
         labels: list[str] = []
+        occupied: list = []
         for item in items:
             bbox = item["bbox"]
             x1 = int(bbox["x"]) + offset_x
             y1 = int(bbox["y"]) + offset_y
-            x2 = x1 + int(bbox["w"])
-            y2 = y1 + int(bbox["h"])
-            label = str(
-                item.get("confirmed_label") if confirmed else item.get("predicted_label")
-            )
+            label = str(item.get("confirmed_label") if confirmed else item.get("predicted_label"))
             labels.append(label)
-            line_thickness = max(3, int(4 * scale))
-            cv2.rectangle(image, (x1, y1), (x2, y2), green, line_thickness, cv2.LINE_AA)
-            text = f"JEWEL {item['index']}  |  {label.upper()}"
-            text_thickness = max(2, int(2 * scale))
-            font_size = fitted_font(text, max(140, x2 - x1 - 28), 0.72 * scale, text_thickness)
-            (_, text_height), baseline = cv2.getTextSize(
-                text, cv2.FONT_HERSHEY_SIMPLEX, font_size, text_thickness
-            )
-            tag_height = text_height + baseline + max(18, int(18 * scale))
-            tag_width = min(
-                image.shape[1] - x1,
-                cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, font_size, text_thickness)[0][0]
-                + max(28, int(28 * scale)),
-            )
-            text_top = max(0, y1 - tag_height)
-            cv2.rectangle(image, (x1, text_top), (x1 + tag_width, y1), dark, -1)
-            cv2.rectangle(image, (x1, text_top), (x1 + max(7, int(8 * scale)), y1), gold, -1)
-            cv2.putText(
-                image,
-                text,
-                (x1 + max(17, int(19 * scale)), y1 - baseline - max(6, int(7 * scale))),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                font_size,
-                white,
-                text_thickness,
-                cv2.LINE_AA,
-            )
-
+            label_box(image, (x1, y1, x1 + int(bbox["w"]), y1 + int(bbox["h"])),
+                      f"Jewel {item['index']}  |  {label}", occupied=occupied)
         captured_at = datetime.fromisoformat(str(state["captured_at"]))
-        stamp = captured_at.strftime("%d-%m-%Y  %I:%M:%S %p")
         weight = state.get("weight_g")
-        weight_text = f"{float(weight):.2f} g" if weight is not None else "Unavailable"
-        type_text = ", ".join(labels).upper()
-        panel_height = max(112, int(138 * scale))
-        overlay = image.copy()
-        cv2.rectangle(overlay, (0, 0), (image.shape[1], panel_height), dark, -1)
-        cv2.addWeighted(overlay, 0.96, image, 0.04, 0, image)
-        cv2.rectangle(image, (0, panel_height - max(5, int(6 * scale))), (image.shape[1], panel_height), gold, -1)
-
-        margin = max(18, int(22 * scale))
-        gap = max(18, int(24 * scale))
-        available = image.shape[1] - (2 * margin) - (2 * gap)
-        type_width = int(available * 0.43)
-        weight_width = int(available * 0.22)
-        date_width = available - type_width - weight_width
-        columns = (
-            (margin, type_width, "JEWELLERY TYPE", type_text),
-            (margin + type_width + gap, weight_width, "CAPTURED WEIGHT", weight_text),
-            (margin + type_width + weight_width + (2 * gap), date_width, "DATE & TIME", stamp),
-        )
-        label_size = max(0.42, 0.48 * scale)
-        value_size = max(0.66, 0.82 * scale)
-        label_thickness = max(1, int(2 * scale))
-        value_thickness = max(2, int(2.4 * scale))
-        label_y = max(30, int(38 * scale))
-        value_y = panel_height - max(24, int(30 * scale))
-        for column_index, (left, width, caption, value) in enumerate(columns):
-            if column_index:
-                divider_x = left - (gap // 2)
-                cv2.line(image, (divider_x, margin), (divider_x, panel_height - margin), (82, 86, 92), 1, cv2.LINE_AA)
-            cv2.putText(image, caption, (left, label_y), cv2.FONT_HERSHEY_SIMPLEX, label_size, gold, label_thickness, cv2.LINE_AA)
-            fitted = fitted_font(value, width, value_size, value_thickness)
-            cv2.putText(image, value, (left, value_y), cv2.FONT_HERSHEY_SIMPLEX, fitted, white, value_thickness, cv2.LINE_AA)
+        image = add_side_panel(image, "CAPTURE CONFIRMATION" if confirmed else "CAPTURE REVIEW", [
+            ("JEWELLERY TYPE", ", ".join(labels)),
+            ("CAPTURED WEIGHT", f"{float(weight):.2f} g" if weight is not None else "Unavailable"),
+            ("DATE & TIME", captured_at.strftime("%d-%m-%Y  %I:%M:%S %p")),
+        ])
         path = self.repository.session_dir(state["id"]) / "capture" / "classified_evidence.jpg"
         if not cv2.imwrite(str(path), image):
             raise RuntimeError("Could not save the classified capture image")
@@ -1000,14 +893,20 @@ class AnalysisService:
         output_dir = self.repository.session_dir(state["id"]) / "results" / "stones" / suffix
         output_dir.mkdir(parents=True, exist_ok=True)
         gallery_path = output_dir / "stones.png"
-        cv2.imwrite(str(gallery_path), analysis["result_gallery_bgr"])
+        risk = report.get("stone_surface_risk") or {}
+        measurements = report.get("stone_measurements") or {}
+        area = measurements.get("total_area_mm2")
+        stones_found = str(risk.get("level") or "NONE") != "NONE"
+        area_text = f"{float(area):.2f} mm\u00b2" if stones_found and area is not None else "Not reported"
+        gallery = stone_detection.build_result_gallery(analysis["jewel_views"], summary_fields=[
+            ("RESULT", str(risk.get("status") or "No stones")),
+            ("STONE SURFACE AREA", area_text),
+        ])
+        cv2.imwrite(str(gallery_path), gallery)
         report_path = self._save_json(
             output_dir / "result.json",
             report if estimate_weight else without_stone_weight_estimates(report),
         )
-        risk = report.get("stone_surface_risk") or {}
-        measurements = report.get("stone_measurements") or {}
-        stones_found = str(risk.get("level") or "NONE") != "NONE"
         result = {
             # Risk NONE includes calibrated sub-5 mm² regions suppressed as
             # likely reflections/texture rather than reported as real stones.

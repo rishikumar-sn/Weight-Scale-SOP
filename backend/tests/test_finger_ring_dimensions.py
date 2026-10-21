@@ -53,7 +53,11 @@ def test_app_entry_point_exports_fitted_ellipses(tmp_path):
     assert result['od_mm'] == pytest.approx(95 * .18, abs=.3)
     assert result['id_mm'] == pytest.approx(83 * .18, abs=.3)
     assert result['outer']['ellipse'] is not None
-    assert cv2.imread(result['annotated_path']).shape == (400, 500, 3)
+    annotated = cv2.imread(result['annotated_path'])
+    # Measurement panel is outside the photograph; small crops are enlarged
+    # for readable labels without changing the reported measurement geometry.
+    assert annotated.shape[1] > 520
+    assert annotated.shape[0] == round(400 * 520 / 500)
 
 
 @pytest.mark.parametrize('scale', [0, -1, float('nan'), float('inf')])

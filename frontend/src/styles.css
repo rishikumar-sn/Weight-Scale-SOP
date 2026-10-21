@@ -155,10 +155,11 @@ select { width: 100%; height: 46px; padding: 0 12px; border: 1px solid var(--lin
 .resultsTopActions .primary, .resultsTopActions .secondary { min-height: 42px; padding: 9px 13px; font-size: 12px; }
 .resultsView > .resultFigure { width: min(100%, 980px); margin: 0 auto 20px; }
 .resultsView > .resultFigure .resultImage { max-height: min(68vh, 760px); background: white; }
-.resultGallery { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 16px; justify-items: center; }
+.resultGallery { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); gap: 16px; justify-items: center; }
 .resultGallery .resultFigure { margin: 0; }
 .resultGallery .resultFigure { width: min(100%, 720px); }
-.resultGallery .resultImage { min-height: 260px; max-height: min(43vh, 440px); }
+.resultGallery .resultImage { height: min(43vh, 440px); min-height: 260px; max-height: min(43vh, 440px); }
+.resultGallery figcaption { font-size: 15px; }
 .itemResults { display: grid; gap: 20px; }
 .itemResultCard { padding: clamp(16px, 2vw, 24px); border: 1px solid var(--line); border-radius: 18px; background: #fbfaf7; box-shadow: 0 8px 24px rgba(34, 31, 25, .05); }
 .itemResultCard h3 { margin: 0; color: var(--gold-dark); font-family: Georgia, "Times New Roman", serif; }

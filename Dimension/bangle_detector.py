@@ -1096,57 +1096,37 @@ def draw_results(
     outer = _circle_from_result(result["outer"])
     inner = _circle_from_result(result["inner"])
 
-    # Colors: Green for Outer, Blue for Inner
-    COLOR_OUTER = (0, 220, 0)
-    COLOR_INNER = (255, 0, 0)
-
-    # Draw raw contours if provided (thickness 2)
-    if outer_contour is not None:
-        cv2.drawContours(out, [outer_contour], -1, COLOR_OUTER, 2, cv2.LINE_AA)
-    if inner_contour is not None:
-        cv2.drawContours(out, [inner_contour], -1, COLOR_INNER, 2, cv2.LINE_AA)
-
-    # Draw fits (Ellipse or Circle) - thickness 1
-    for circle, color in [(outer, COLOR_OUTER), (inner, COLOR_INNER)]:
+    # Contrasting teal and orange distinguish the two thin measurement fits.
+    colors = ((150, 145, 0), (30, 120, 235))
+    for circle, color in zip((outer, inner), colors):
         if circle.ellipse is not None:
             cv2.ellipse(out, circle.ellipse, color, 1, cv2.LINE_AA)
         else:
-            center = tuple(np.round(circle.center).astype(int))
-            cv2.circle(out, center, int(round(circle.radius)), color, 1, cv2.LINE_AA)
-        
-        # Center point
-        cv2.circle(out, tuple(np.round(circle.center).astype(int)), 3, color, -1, cv2.LINE_AA)
+            cv2.circle(out, tuple(np.round(circle.center).astype(int)),
+                       int(round(circle.radius)), color, 1, cv2.LINE_AA)
 
-    # Annotate labels near center, like in dimension_calib_finale.py
-    cx, cy = np.round(outer.center).astype(int)
-    
-    od_label = f"OD={result['od_mm']:.2f}mm" if result.get("od_mm") else f"OD={result['od_px']:.1f}px"
-    id_label = f"ID={result['id_mm']:.2f}mm" if result.get("id_mm") else f"ID={result['id_px']:.1f}px"
+    # Reserve space for values even for very small, tightly cropped rings.
+    if str(Path(__file__).resolve().parents[1]) not in sys.path:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from backend.app.analysis.annotations import add_side_panel
+    if out.shape[1] < 520:
+        factor = 520 / out.shape[1]
+        out = cv2.resize(out, (520, round(out.shape[0] * factor)), interpolation=cv2.INTER_CUBIC)
 
-    font_scale = 0.55 if outer.radius < 50 else 0.7
-    text_thickness = 1 if outer.radius < 50 else 2
-    outline_thickness = text_thickness + 2
-    if outer.radius < 50 or outer.method.startswith("finger_ring"):
-        label_x = cx + int(round(outer.radius)) + 8
-        max_label_width = max(
-            cv2.getTextSize(od_label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, text_thickness)[0][0],
-            cv2.getTextSize(id_label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, text_thickness)[0][0],
-        )
-        if label_x + max_label_width >= out.shape[1] - 5:
-            label_x = max(5, cx - int(round(outer.radius)) - max_label_width - 8)
-        od_y = max(18, cy - 3)
-        id_y = min(out.shape[0] - 5, cy + 18)
-    else:
-        label_x = max(5, cx - 90)
-        od_y = max(18, cy - 12)
-        id_y = min(out.shape[0] - 5, cy + 18)
+    def measurement(name: str) -> str:
+        value = result.get(f"{name}_mm")
+        if value is not None and np.isfinite(value) and value > 0:
+            return f"{value:.2f} mm"
+        pixels = result.get(f"{name}_px")
+        return f"{pixels:.1f} px (uncalibrated)" if pixels is not None else "Unavailable"
 
-    # Background outline for readability
-    cv2.putText(out, od_label, (label_x, od_y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), outline_thickness, cv2.LINE_AA)
-    cv2.putText(out, od_label, (label_x, od_y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, COLOR_OUTER, text_thickness, cv2.LINE_AA)
-    
-    cv2.putText(out, id_label, (label_x, id_y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), outline_thickness, cv2.LINE_AA)
-    cv2.putText(out, id_label, (label_x, id_y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, COLOR_INNER, text_thickness, cv2.LINE_AA)
+    out = add_side_panel(out, "DIMENSION ANALYSIS", [
+        ("OUTER DIAMETER (OD)", measurement("od")),
+        ("INNER DIAMETER (ID)", measurement("id")),
+    ], field_colors={
+        "OUTER DIAMETER (OD)": tuple(reversed(colors[0])),
+        "INNER DIAMETER (ID)": tuple(reversed(colors[1])),
+    })
 
     return out
 
