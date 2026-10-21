@@ -65,7 +65,7 @@ class StoneAnalysisV2Tests(unittest.TestCase):
             self.assertEqual(before["candidate_id"], after["candidate_id"])
         self.assertTrue(current[-1]["overflow_recovery"])
         np.testing.assert_array_equal(current[-1]["seed_mask"], face)
-        for color, confidence in (("Yellow/Gold", .98), ("Black", .98), ("White/Colorless", .98), ("Green", .50)):
+        for color, confidence in (("Yellow/Gold", .98), ("White/Colorless", .98), ("Green", .50)):
             with self.subTest(color=color, confidence=confidence), \
                  patch.object(v2, "_non_gold_color_components", return_value=[residual]), \
                  patch.object(v2, "_non_gold_neutral_components", return_value=[]), \
@@ -82,6 +82,35 @@ class StoneAnalysisV2Tests(unittest.TestCase):
                  "color": "White/Colorless", "color_confidence": .98,
              }):
             self.assertEqual(len(v2.generate_stone_candidates(image, jewel, seeds, gold)), 48)
+
+    def test_overflow_recovers_dark_and_mixed_faces_using_hsv_evidence(self):
+        image = np.full((120, 120, 3), (30, 170, 210), np.uint8)
+        jewel = np.full((120, 120), 255, np.uint8)
+        face = circle_mask((120, 120), (80, 80), 12)
+        gold = jewel.copy()
+        gold[face > 0] = 0
+        seed = circle_mask((120, 120), (20, 20), 3)
+        residual = {"mask": face, "confidence": .60, "median_saturation": 190, "median_value": 60}
+        # A single stronger seed exhausts the budget, just as metal fragments
+        # do in the saved necklace. Color labels alone must not lose the face.
+        for label in ("Black", "Multicolor/Color-changing"):
+            for bgr, expected in (((12, 18, 55), 2), ((12, 55, 12), 2), ((45, 45, 45), 1)):
+                with self.subTest(label=label, bgr=bgr), \
+                     patch.object(v2, "_non_gold_color_components", return_value=[residual]), \
+                     patch.object(v2, "_non_gold_neutral_components", return_value=[]), \
+                     patch.object(v2, "_structural_components", return_value=[]), \
+                     patch.object(v2, "classify_stone_instance_color", return_value={
+                         "color": label, "color_confidence": .85,
+                     }):
+                    image[face > 0] = bgr
+                    candidates = v2.generate_stone_candidates(
+                        image, jewel, [{"mask": seed, "color": "Red", "circularity": 1.0}],
+                        gold, max_candidates=1,
+                    )
+                    self.assertEqual(len(candidates), expected)
+                    if expected == 2:
+                        self.assertTrue(candidates[-1]['overflow_recovery'])
+                        np.testing.assert_array_equal(candidates[-1]['seed_mask'], face)
 
     def test_overflow_seed_cannot_take_pixels_from_an_existing_prediction(self):
         primary_mask = circle_mask((120, 120), (60, 60), 18)
@@ -218,6 +247,12 @@ class StoneAnalysisV2Tests(unittest.TestCase):
                 "Black", 588, 0.47, 0.0, ["structural", "dark_structure"]
             )
         )
+        self.assertFalse(v2.should_reject_neutral_candidate(
+            "Black", 150, .47, .0, ["non_gold_hsv_residual", "non_gold_chromatic_face"],
+        ))
+        self.assertTrue(v2.should_reject_neutral_candidate(
+            "Black", 150, .47, .40, ["non_gold_hsv_residual", "non_gold_chromatic_face"],
+        ))
         self.assertTrue(
             v2.should_reject_neutral_candidate(
                 "Black", 588, 0.47, 0.31, ["structural", "dark_structure"]

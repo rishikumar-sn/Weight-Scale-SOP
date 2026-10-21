@@ -1,0 +1,23 @@
+{
+  "label_source": "Visual review of original images during this experiment; these are a small review set, not exhaustive ground truth.",
+  "items": {
+    "live_white_control_item_01": {
+      "true_white_region_ids": [7, 4, 5],
+      "note": "Three surviving baseline white masks on the necklace and earring halos; preservation does not establish complete white-stone recall."
+    },
+    "20261021_130814_33cc759f_item_02": {
+      "background_hole_region_ids": [2, 4, 7]
+    },
+    "20261021_134420_a434dc32_item_01": {
+      "background_hole_region_ids": [1, 2, 3, 4, 5, 6, 7],
+      "note": "Seven white chain openings. The multicolor clasp opening and three pendant gaps are unresolved by the white-only prototype. Pale pendant ornaments are baseline false negatives."
+    },
+    "20261021_134036_0e1a7c29_item_01": {
+      "background_hole_region_ids": [2, 3, 4, 5, 7, 8]
+    },
+    "20260904_112410_79db0245_item_02": {
+      "true_white_region_ids": [1, 12],
+      "note": "Two white faces in the central pendant rosette. The broad raw-cleanup ablation removes region 1 and changes region 12."
+    }
+  }
+}

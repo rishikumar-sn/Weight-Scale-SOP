@@ -210,6 +210,12 @@ def build_jewellery_mask(image: np.ndarray, erase_mask: np.ndarray | None = None
             (erase_mask > 0).astype(np.uint8),
             np.ones((25, 25), np.uint8),
             iterations=1,
+            # The crop exterior is also outside the valid analysis area.
+            # A testbed can reach the crop edge with no zero-mask pixels
+            # left there; include that exterior when expanding the erase
+            # region so a surviving tray rim cannot become another jewel.
+            borderType=cv2.BORDER_CONSTANT,
+            borderValue=1,
         )
         # Score the same valid area that will be returned. A complex necklace
         # can touch the testbed boundary and connect the useful adaptive mask

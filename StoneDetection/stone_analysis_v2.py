@@ -76,6 +76,8 @@ def should_reject_neutral_candidate(
     # independent evidence of a coherent dark face. This rejects tiny gold
     # filigree cavities that color seeds alone can mistake for black stones.
     sources = set(source_methods or ())
+    if "non_gold_chromatic_face" in sources:
+        return False
     return float(broad_gold_share) > 0.30 and not {
         "structural",
         "dark_structure",
@@ -671,13 +673,41 @@ def generate_stone_candidates(
             image_bgr, candidate["seed_mask"], gold_mask=gold_mask,
             lab_image=overflow_lab, hsv_image=overflow_hsv,
         )
-        if classification["color"] not in {
+        color = classification["color"]
+        supported_color = color in {
             "Red", "Pink", "Green", "Blue", "Purple/Violet",
-        } or float(classification["color_confidence"]) < 0.65:
+        }
+        # Low-light LAB chroma collapses on red/green faces. Their median can
+        # be black, or their dark body and colored highlight can vote mixed.
+        # A display-color label must not veto independent HSV segmentation.
+        # Require a substantial, metal-enclosed non-gold chromatic face for
+        # these ambiguous labels; neutral holes/reflections stay excluded.
+        if color in {"Black", "Multicolor/Color-changing"} and "non_gold_hsv_residual" in sources:
+            valid = candidate["seed_mask"] > 0
+            chromatic = (
+                (overflow_hsv[:, :, 1] >= 48)
+                & (overflow_hsv[:, :, 2] >= 24)
+                & (gold_mask == 0)
+            )
+            chromatic_share = float(np.mean(chromatic[valid]))
+            shape_metrics = _shape_metrics(candidate["seed_mask"])
+            supported_color = (
+                chromatic_share >= 0.75
+                and shape_metrics["aspect_ratio"] <= 2.5
+                and shape_metrics["solidity"] >= 0.45
+                and shape_metrics["compactness"] >= 0.12
+                and _metal_surround_ratio(candidate["seed_mask"], gold_mask) >= 0.35
+            )
+            if supported_color:
+                # Preserve the independent evidence through final neutral
+                # filtering. Broad gold also overlaps shadowed colored facets;
+                # strict-gold and raw warm-metal checks still apply.
+                candidate["source_methods"] = sorted(sources | {"non_gold_chromatic_face"})
+        if not supported_color or float(classification["color_confidence"]) < 0.65:
             continue
-        # Neutral overflow is deliberately excluded: shadowed background gaps
-        # between beads can have the same enclosure and HSV values as white
-        # stones. Existing neutral detection keeps its validated behaviour.
+        # Achromatic overflow stays excluded: shadowed background gaps between
+        # beads can resemble white/black stones. Ambiguous labels above require
+        # independent chromatic support; white recovery remains unchanged.
         candidate["overflow_recovery"] = True
         overflow.append(candidate)
         if len(overflow) >= STONE_OVERFLOW_MAX_COUNT:
