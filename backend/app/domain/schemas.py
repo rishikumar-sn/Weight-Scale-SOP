@@ -54,3 +54,11 @@ class CaptureSummary(BaseModel):
 
 class CameraFlickerSettings(BaseModel):
     mode: Literal["driver", "temporal_average", "adaptive", "normal", "driver_50", "driver_60", "shutter_100", "shutter_50", "average_30", "average_90", "row", "hybrid", "adaptive_average"]
+
+
+class CameraRotationSettings(BaseModel):
+    rotation: Literal[90, -90]
+
+
+class ScaleSettings(BaseModel):
+    model: Literal["embsys_wm", "essae_jx500"]

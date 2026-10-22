@@ -131,6 +131,8 @@ class CaptureService:
     def capture(self) -> dict[str, Any]:
         frame, camera_snapshot = self.camera.snapshot_frame()
         scale_snapshot = self.scale.snapshot()
+        if scale_snapshot.get("unit") not in (None, "g"):
+            raise RuntimeError("ct capture is not allowed. Switch the scale to grams (g) and try again.")
         weight = scale_snapshot.get("weight_g")
         reading_age_ms = scale_snapshot.get("age_ms")
         if (
@@ -245,6 +247,8 @@ class CaptureService:
 
         frame, camera_snapshot = self.camera.snapshot_frame()
         scale_snapshot = self.scale.snapshot()
+        if scale_snapshot.get("unit") not in (None, "g"):
+            raise RuntimeError("ct capture is not allowed. Switch the scale to grams (g) and try again.")
         weight = scale_snapshot.get("weight_g")
         reading_age_ms = scale_snapshot.get("age_ms")
         if (

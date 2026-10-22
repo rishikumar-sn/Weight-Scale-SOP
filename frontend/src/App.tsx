@@ -90,8 +90,10 @@ export default function App() {
   const [message, setMessage] = useState("Place the jewellery and check the weight.");
   const [error, setError] = useState("");
   const [setupOpen, setSetupOpen] = useState(false);
-  const [settingsSection, setSettingsSection] = useState<"flicker" | "areas">("flicker");
+  const [settingsSection, setSettingsSection] = useState<"flicker" | "areas" | "rotation" | "scale">("flicker");
   const [flickerMode, setFlickerMode] = useState("driver");
+  const [scaleModel, setScaleModel] = useState("embsys_wm");
+  const [cameraRotation, setCameraRotation] = useState(-90);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsNotice, setSettingsNotice] = useState("");
   const [drawingTarget, setDrawingTarget] = useState<"processing" | "apriltag" | null>(null);
@@ -169,6 +171,8 @@ export default function App() {
       setSettings(data.settings);
       setHardwarePlatform(data.platform);
       setFlickerMode(data.settings.camera.anti_flicker_mode);
+      setScaleModel(data.settings.scale.model || "embsys_wm");
+      setCameraRotation(data.settings.camera.rotation % 360 === 90 ? 90 : -90);
       setLabels(data.labels || []);
       setRois(data.settings.rois || { processing: null, apriltag: null });
     }).catch((reason) => setError(reason.message));
@@ -324,6 +328,8 @@ export default function App() {
   function toggleSettings() {
     if (!setupOpen) {
       setFlickerMode(settings?.camera?.anti_flicker_mode || "driver");
+      setCameraRotation(settings?.camera?.rotation % 360 === 90 ? 90 : -90);
+      setScaleModel(settings?.scale?.model || "embsys_wm");
       setDraftRois(rois);
       setSettingsNotice("");
     }
@@ -370,6 +376,43 @@ export default function App() {
     finally { setSettingsSaving(false); }
   }
 
+  async function saveScale() {
+    if (settingsSaving) return;
+    setSettingsSaving(true);
+    setSettingsNotice("");
+    try {
+      const data = await requestJson("/api/settings/scale", { method: "PUT", body: JSON.stringify({ model: scaleModel }) });
+      setSettings(data.settings);
+      setLive((current: any) => ({ ...current, scale: data.scale }));
+      setSettingsNotice("Scale selection saved. Connecting now; it will reconnect automatically after unplugging and on startup.");
+    } catch (reason: any) { setSettingsNotice(`Could not apply scale: ${reason.message}`); }
+    finally { setSettingsSaving(false); }
+  }
+
+  function checkCaptureUnit() {
+    if (live.scale?.connected && live.scale?.unit === "ct") {
+      window.alert("ct capture is not allowed. Switch the scale to grams (g) and try again.");
+      return false;
+    }
+    return true;
+  }
+
+  async function saveRotation() {
+    if (settingsSaving) return;
+    setSettingsSaving(true);
+    setSettingsNotice("");
+    try {
+      const data = await requestJson("/api/settings/camera/rotation", { method: "PUT", body: JSON.stringify({ rotation: cameraRotation }) });
+      setSettings(data.settings);
+      setRois(data.settings.rois);
+      setDraftRois(data.settings.rois);
+      setDrawingTarget(null);
+      dragRef.current = null;
+      setSettingsNotice("Rotation applied and saved. It will be restored next time you open the app.");
+    } catch (reason: any) { setSettingsNotice(`Could not apply rotation: ${reason.message}`); }
+    finally { setSettingsSaving(false); }
+  }
+
   function pointerPosition(event: { clientX: number; clientY: number }) {
     const video = videoContentRect();
     if (!video || !video.width || !video.height) return null;
@@ -393,6 +436,7 @@ export default function App() {
   }
 
   async function capture() {
+    if (!checkCaptureUnit()) return;
     setBusy(true);
     setError("");
     setMessage("Capturing jewellery and weight...");
@@ -420,6 +464,7 @@ export default function App() {
   }
 
   async function captureTare() {
+    if (!checkCaptureUnit()) return;
     setBusy(true);
     setError("");
     setMessage(`Capturing ${tareMode} tare weight...`);
@@ -450,6 +495,7 @@ export default function App() {
   }
 
   async function recapture() {
+    if (!checkCaptureUnit()) return;
     setBusy(true);
     setError("");
     try {
@@ -504,7 +550,9 @@ export default function App() {
     return "capture";
   }, [active]);
 
-  const weight = live.scale?.connected ? live.scale?.weight_g : undefined;
+  const weight = live.scale?.connected ? (live.scale?.value ?? live.scale?.weight_g) : undefined;
+  const weightUnit = live.scale?.unit || "g";
+  const weightPrecision = live.scale?.model === "essae_jx500" ? 3 : 2;
   const result = active?.result || {};
   const media = active?.media || {};
   const detectedItems = active?.classification?.items || [];
@@ -603,7 +651,7 @@ export default function App() {
             />
             <div className="liveWeightOverlay" aria-label="Live scale weight">
               <span>Live weight</span>
-              <strong>{typeof weight === "number" ? weight.toFixed(2) : "--"}<small>g</small></strong>
+              <strong>{typeof weight === "number" ? weight.toFixed(weightPrecision) : "--"}<small>{weightUnit}</small></strong>
             </div>
             {!cameraReady && !cameraAdapting && (
               <div className="cameraUnavailable" role="status">
@@ -630,6 +678,8 @@ export default function App() {
               <nav className="settingsNav" aria-label="Settings categories">
                 <button aria-current={settingsSection === "flicker" ? "page" : undefined} onClick={() => { setSettingsSection("flicker"); setDrawingTarget(null); setSettingsNotice(""); }}>Camera flicker</button>
                 <button aria-current={settingsSection === "areas" ? "page" : undefined} onClick={() => { setSettingsSection("areas"); setSettingsNotice(""); }}>Camera areas</button>
+                <button aria-current={settingsSection === "rotation" ? "page" : undefined} onClick={() => { setSettingsSection("rotation"); setDrawingTarget(null); dragRef.current = null; setSettingsNotice(""); }}>Camera rotation</button>
+                <button aria-current={settingsSection === "scale" ? "page" : undefined} onClick={() => { setSettingsSection("scale"); setDrawingTarget(null); dragRef.current = null; setSettingsNotice(""); }}>Weight scale</button>
               </nav>
               <div className="settingsContent">
                 {!settings ? <p role="status">Loading settings…</p> : settingsSection === "flicker" ? <>
@@ -643,6 +693,28 @@ export default function App() {
                   </div>
                   <button className="primary" disabled={settingsSaving || (busy || stage === "processing")} onClick={saveFlicker}>{settingsSaving ? "Applying…" : "Apply method"}</button>
                   {(busy || stage === "processing") && <p>Camera changes are available when the current capture finishes. Analysis continues while settings are open.</p>}
+                </> : settingsSection === "scale" ? <>
+                  <h3>Weight scale</h3>
+                  <p>Select the scale connected to this station. Only readings in grams can be captured.</p>
+                  <label htmlFor="scale-model">Scale model</label>
+                  <select id="scale-model" value={scaleModel} disabled={settingsSaving} onChange={event => { setScaleModel(event.target.value); setSettingsNotice(""); }}>
+                    <option value="embsys_wm">EMBSYS WM</option>
+                    <option value="essae_jx500">ESSAE JX500</option>
+                  </select>
+                  <p>ESSAE JX500 finds its USB port automatically, including when the port number changes. Its decoded USB output must be connected.</p>
+                  <div className="filterStatus" role="status"><strong>{live.scale?.status || "Waiting for scale"}</strong><span>{live.scale?.port || "Searching for USB scale"}</span>{live.scale?.error && <span>{live.scale.error}</span>}</div>
+                  <button className="primary" disabled={settingsSaving || busy || stage === "processing"} onClick={saveScale}>{settingsSaving ? "Applying..." : "Apply scale"}</button>
+                </> : settingsSection === "rotation" ? <>
+                  <h3>Camera rotation</h3>
+                  <p>Choose the camera orientation. Both options keep the full-resolution image at 1080 × 1920.</p>
+                  <label htmlFor="camera-rotation">Orientation</label>
+                  <select id="camera-rotation" value={cameraRotation} disabled={settingsSaving} onChange={event => { setCameraRotation(Number(event.target.value)); setSettingsNotice(""); }}>
+                    <option value={90}>Turn right (+90°)</option>
+                    <option value={-90}>Turn left (−90°)</option>
+                  </select>
+                  <p className="methodDescription">Directions are relative to the camera's original image. Apply to update the live view and save this orientation for future sessions.</p>
+                  <button className="primary" disabled={settingsSaving || markerRefreshing || cameraReconnecting || busy || stage === "processing"} onClick={saveRotation}>{settingsSaving ? "Applying…" : "Apply rotation"}</button>
+                  {(busy || stage === "processing") && <p>Camera changes are available when the current capture finishes.</p>}
                 </> : <>
                   <h3>Camera areas</h3><p>The testbed is detected automatically at capture time. Draw a marker search area or a lighting metering area on the live camera.</p>
                   <div className="areaOption"><strong>Marker search area</strong><p>Include the entire AprilTag with a little space around it.</p><button className="secondary" disabled={settingsSaving || !live.camera?.connected} aria-pressed={drawingTarget === "apriltag"} onClick={() => setDrawingTarget("apriltag")}>Draw marker area</button><button className="textButton" disabled={markerRefreshing || !cameraReady || settingsSaving || busy || stage === "processing"} onClick={async () => { const data = await refreshMarkerRoi(false); if (data) setDraftRois(current => ({ ...current, apriltag: data.roi })); }}>{markerRefreshing ? "Detecting…" : "Auto-detect and save marker"}</button></div>
@@ -679,7 +751,7 @@ export default function App() {
                 <p>Keep every jewel on the testbed, leave a visible gap between them, and keep the marker clearly visible.</p>
                 <div className="weightCard">
                   <span>Current weight</span>
-                  <strong>{typeof weight === "number" ? `${weight.toFixed(2)} g` : "Waiting..."}</strong>
+                  <strong>{typeof weight === "number" ? `${weight.toFixed(weightPrecision)} ${weightUnit}` : "Waiting..."}</strong>
                   <time dateTime={currentTime.toISOString()}>{liveDate} · {liveTime}</time>
                 </div>
                 <button className="primary captureButton" onClick={capture} disabled={busy || !cameraReady || !live.scale?.connected || !rois.apriltag}>
@@ -862,7 +934,7 @@ export default function App() {
                 </div>
                 <div className="weightCard">
                   <span>Current tare weight</span>
-                  <strong>{typeof weight === "number" ? `${weight.toFixed(2)} g` : "Waiting..."}</strong>
+                  <strong>{typeof weight === "number" ? `${weight.toFixed(weightPrecision)} ${weightUnit}` : "Waiting..."}</strong>
                   <time dateTime={currentTime.toISOString()}>{liveDate} · {liveTime}</time>
                 </div>
                 <button className="primary captureButton" onClick={captureTare} disabled={busy || !cameraReady || !live.scale?.connected}>

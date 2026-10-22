@@ -22,6 +22,12 @@ it may request sudo on first use. The serial port starts with automatic
 discovery. Set `hardware_profiles.linux.scale.port` to a persistent
 `/dev/serial/by-id/...` path if multiple USB serial devices are connected.
 
+For ESSAE JX500, choose **Settings > Weight scale > ESSAE JX500 > Apply scale**.
+The app saves the Linux selection, reads the Arduino/USB decoder at 115200 baud,
+auto-discovers `/dev/ttyUSB*` and `/dev/ttyACM*` ports, and reconnects after
+unplugging or port-number changes. Both grams and carats display live; jewellery
+and tare captures require grams. See [scale selection](README.md#weight-scale-selection).
+
 ## 1. Install system dependencies
 
 Run these commands on the Ubuntu PC:

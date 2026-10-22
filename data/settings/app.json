@@ -22,16 +22,16 @@
   },
   "rois": {
     "processing": {
-      "x": 0.07128288690850611,
-      "y": 0.15314008187556613,
+      "x": 0.09736976480202464,
+      "y": 0.40241543682301106,
       "width": 0.8313473482894692,
       "height": 0.4444444813014228
     },
     "apriltag": {
-      "x": 0.06666666666666667,
-      "y": 0.15052083333333333,
-      "width": 0.09351851851851851,
-      "height": 0.052083333333333336
+      "x": 0.125,
+      "y": 0.240625,
+      "width": 0.08611111111111111,
+      "height": 0.046875
     }
   },
   "apriltag": {
@@ -72,7 +72,7 @@
         "width": 1920,
         "height": 1080,
         "fps": 30,
-        "rotation": 270,
+        "rotation": 90,
         "preview_quality": 78,
         "preview_max_dimension": 960,
         "power_line_hz": 50,
@@ -93,8 +93,17 @@
         }
       },
       "scale": {
-        "port": "COM12",
-        "baud_rate": 9600
+        "model": "essae_jx500",
+        "port": "COM11",
+        "baud_rate": 115200,
+        "usb_identity": "1027:24577:A5069RR4A",
+        "devices": {
+          "embsys_wm": {
+            "port": "COM12",
+            "baud_rate": 9600,
+            "usb_identity": ""
+          }
+        }
       }
     },
     "linux": {

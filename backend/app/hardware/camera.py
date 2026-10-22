@@ -135,6 +135,7 @@ class CameraService:
         self._flicker: FlickerStabilizer | None = None
         self._temporal_average: TemporalFrameAverage | None = None
         self._active_config: dict[str, Any] = {}
+        self._rotation_override: int | None = None
         self._adaptive: AdaptiveCameraPipeline | None = None
         self._adaptive_status: dict[str, Any] = {}
         self._method_pipeline = None
@@ -207,6 +208,30 @@ class CameraService:
         if rotation == 270:
             return cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
         return frame
+
+    def set_rotation(self, rotation: int) -> None:
+        """Turn the current image and future frames without reopening hardware."""
+        with self._preview_ready:
+            previous = self._rotation_override
+            if previous is None:
+                previous = int(self._active_config.get("rotation", rotation))
+            self._rotation_override = rotation % 360
+            delta = (rotation - previous) % 360
+            if not delta:
+                return
+            # Reject any old-orientation JPEG currently being encoded.
+            self._sequence += 1
+            self._jpeg_sequence = self._sequence
+            self._jpeg = None
+            self._jpeg_time = None
+            self._preview_pending = None
+            if self._frame is not None:
+                self._frame = self._rotate(self._frame, delta)
+                self._actual_resolution = (self._frame.shape[1], self._frame.shape[0])
+                if self._frame_time is not None:
+                    self._sequence += 1
+                    self._preview_pending = (self._frame, self._frame_time, self._sequence)
+            self._preview_ready.notify_all()
 
     @staticmethod
     def _preview_frame(frame: np.ndarray, max_dimension: int) -> np.ndarray:
@@ -407,12 +432,16 @@ class CameraService:
                             continue
                     if self._flicker is not None:
                         frame = self._flicker.apply(frame)
-                    rotation = int(self._active_config["rotation"])
-                    frame = self._rotate(frame, rotation)
                     if self._temporal_average is not None:
                         frame = self._temporal_average.apply(frame)
                     now = datetime.now().astimezone()
                     with self._preview_ready:
+                        # Average in sensor coordinates so changing orientation
+                        # never mixes differently rotated images in the window.
+                        rotation = self._rotation_override
+                        if rotation is None:
+                            rotation = int(self._active_config["rotation"])
+                        frame = self._rotate(frame, rotation)
                         self._frame = frame
                         self._frame_time = now
                         self._sequence += 1

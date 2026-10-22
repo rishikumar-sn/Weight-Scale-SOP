@@ -63,9 +63,15 @@ resources before the process exits. The button is disabled while a capture or
 analysis is running. `Ctrl+C` in the backend terminal uses the same cleanup path.
 
 Only one backend process may run because it owns the camera and COM port. Open
-the camera's **Settings** icon for flicker correction and camera areas. The
+the camera's **Settings** icon for flicker correction, camera areas and rotation. The
 testbed is detected automatically; the marker search and lighting metering areas
 can be drawn and saved while the live preview remains visible.
+
+Under **Camera rotation**, select **Turn right (+90°)** or **Turn left (−90°)**
+and click **Apply rotation**. These orientations are relative to the original
+camera image and keep the full-resolution output at 1080 × 1920. The live view
+updates without reconnecting the camera, and saved camera areas turn with the
+image. The last applied rotation is restored on the next app launch.
 
 The live feed is processed in the backend. Windows initially keeps the existing
 90-frame rolling average and driver-managed exposure. Select **Average · 90
@@ -86,6 +92,30 @@ jewellery or changing lighting does not trigger repeated capture lockouts.
 Click **Apply method** again to recalibrate for different lighting. Fixed methods
 apply their correction without measuring flicker on every frame. Capture still
 requires a connected camera with a current frame and an available scale.
+
+### Weight scale selection
+
+Open **Settings > Weight scale**, select **EMBSYS WM** (the original CH340
+scale) or **ESSAE JX500**, then click **Apply scale**. Applying saves the model
+in the current OS hardware profile and reconnects the serial reader immediately.
+Startup restores that selection. Switching models preserves each model's serial
+settings; existing installations keep EMBSYS WM selected by default.
+
+ESSAE uses the existing Arduino/USB decoder output at 115200 baud, including
+lines such as `1026 ms WEIGHT = 3.640 g RAW: ...`. It ignores startup/debug
+lines, handles fragmented lines, and displays both `g` and `ct` with three
+decimal places. Jewellery and tare capture accept only grams. Attempting a
+capture in `ct` shows **ct capture is not allowed**; the backend also rejects it.
+Carat values are never stored as gram weights.
+
+ESSAE first tries COM11 on Windows, then probes available serial devices for
+valid ESSAE messages. Linux probes USB serial devices such as `/dev/ttyUSB*`
+and `/dev/ttyACM*`. After receiving a valid reading it saves the port and, when
+available, the USB serial identity. It reconnects automatically after unplugging,
+missing readings, and port-number changes. Close the standalone ESSAE display
+or any serial monitor before using this app, since only one process can own
+the port. The scale status exposes the active port, last raw reading, errors,
+and discarded-frame count through `/api/health` and `/api/live`.
 
 ### Windows and Linux hardware settings
 

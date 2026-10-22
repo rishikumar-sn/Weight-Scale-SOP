@@ -45,6 +45,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         },
     },
     "scale": {
+        "model": "embsys_wm",
         "port": "COM12" if os.name == "nt" else "",
         "baud_rate": 9600,
     },
@@ -108,7 +109,7 @@ def hardware_defaults(platform: str) -> dict[str, Any]:
             "gain": 0, "backlight_compensation": 0, "white_balance_automatic": 1,
         },
     })
-    return {"camera": camera, "scale": {"port": "COM12" if windows else "", "baud_rate": 9600}}
+    return {"camera": camera, "scale": {"model": "embsys_wm", "port": "COM12" if windows else "", "baud_rate": 9600}}
 
 
 class SettingsStore:
@@ -167,3 +168,48 @@ class SettingsStore:
             profiles[self.platform] = _merge(active, hardware)
             self._write(updated)
             return self.get()
+
+    def select_scale(self, model: str) -> dict[str, Any]:
+        if model not in {"embsys_wm", "essae_jx500"}:
+            raise ValueError("Unsupported scale model")
+        with self._lock:
+            current = self.get()["scale"]
+            devices = deepcopy(current.get("devices", {}))
+            previous_model = current.get("model", "embsys_wm")
+            devices[previous_model] = {key: current.get(key, "") for key in ("port", "baud_rate", "usb_identity")}
+            selected = devices.get(model, {
+                "port": "COM11" if self.platform == "windows" and model == "essae_jx500" else
+                        "COM12" if self.platform == "windows" else "",
+                "usb_identity": "",
+            })
+            return self.update({"scale": {
+                **selected, "model": model, "devices": devices,
+                "baud_rate": 115200 if model == "essae_jx500" else int(selected.get("baud_rate") or 9600),
+                "usb_identity": selected.get("usb_identity", ""),
+            }})
+
+    def remember_scale_device(self, model: str, port: str, identity: str) -> None:
+        with self._lock:
+            if self.get()["scale"].get("model") == model:
+                self.update({"scale": {"port": port, "usb_identity": identity}})
+
+    def update_camera_rotation(self, rotation: int) -> dict[str, Any]:
+        """Save orientation and keep saved areas on the same physical objects."""
+        if rotation not in (90, -90):
+            raise ValueError("Camera rotation must be +90 or -90 degrees")
+        with self._lock:
+            previous = self.get()
+            rotation %= 360
+            turns = ((rotation - int(previous["camera"]["rotation"])) % 360) // 90
+            rois = {}
+            for name, roi in previous["rois"].items():
+                if roi is not None:
+                    roi = dict(roi)
+                    for _ in range(turns):
+                        roi = {
+                            "x": max(0.0, 1 - roi["y"] - roi["height"]),
+                            "y": roi["x"],
+                            "width": roi["height"], "height": roi["width"],
+                        }
+                rois[name] = roi
+            return self.update({"camera": {"rotation": rotation}, "rois": rois})

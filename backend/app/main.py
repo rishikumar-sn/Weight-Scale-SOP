@@ -18,7 +18,7 @@ from .core.config import (
     SESSIONS_DIR,
     SettingsStore,
 )
-from .domain.schemas import CameraFlickerSettings, ClassificationConfirmation, RoiSettings, TareCaptureRequest
+from .domain.schemas import CameraFlickerSettings, CameraRotationSettings, ClassificationConfirmation, RoiSettings, ScaleSettings, TareCaptureRequest
 from .domain.workflow import class_labels
 from .hardware.camera import CameraService
 from .hardware.scale import ScaleService
@@ -32,7 +32,7 @@ from .storage.repository import CaptureRepository
 settings_store = SettingsStore()
 repository = CaptureRepository(DATABASE_PATH, SESSIONS_DIR)
 camera = CameraService(settings_store.get)
-scale = ScaleService(settings_store.get)
+scale = ScaleService(settings_store.get, settings_store.remember_scale_device)
 reports = ReportService()
 artifact_compression = ArtifactCompressionService(repository)
 captures = CaptureService(camera, scale, settings_store, repository, artifact_compression)
@@ -209,6 +209,13 @@ def save_camera_flicker(payload: CameraFlickerSettings):
     return {"settings": saved}
 
 
+@app.put("/api/settings/scale")
+def save_scale(payload: ScaleSettings):
+    saved = settings_store.select_scale(payload.model)
+    scale.request_reconnect()
+    return {"settings": saved, "scale": scale.snapshot()}
+
+
 @app.put("/api/settings/rois")
 def save_rois(payload: RoiSettings):
     previous = settings_store.get()
@@ -217,6 +224,13 @@ def save_rois(payload: RoiSettings):
             and saved["rois"].get("processing") != previous["rois"].get("processing")):
         camera.request_reconnect()
     return saved
+
+
+@app.put("/api/settings/camera/rotation")
+def save_camera_rotation(payload: CameraRotationSettings):
+    saved = settings_store.update_camera_rotation(payload.rotation)
+    camera.set_rotation(saved["camera"]["rotation"])
+    return {"settings": saved}
 
 
 @app.post("/api/settings/rois/apriltag/refresh")
