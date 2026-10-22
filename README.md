@@ -14,12 +14,25 @@ Dimension/              Bangle and ring measurement
 frontend/               React/Vite operator interface
 models/detection/        Bead-detection ONNX model
 models/packet/           Packet barcode label ONNX model
+models/segmentation/     Testbed and foreign-object segmentation ONNX models
 StoneDetection/         Stone detection and weight estimation
 reference/hardware/      Original camera, scale, and shutter scripts
 scripts/                 Setup, launch, and regression helpers
 data/                    Runtime settings, captures, metadata, and reports
 run.py                   Production entry point
 ```
+
+## Foreign-object rejection
+
+Jewellery captures first pass the existing per-item non-jewellery checks. When
+every item passes, `models/segmentation/anomolies.onnx` checks the raw camera
+image for objects mixed with jewellery. Only object segmentation pixels inside
+the detected testbed polygon count. Confidence thresholds are `foreign_obj=0.45`,
+`plastic_packet=0.35`, and `paper=0.25`; the `jewellery` label does not reject a
+capture. Any qualifying foreign object blocks confirmation and analysis and
+shows a recapture-only screen. Missing models or capture masks block the check
+rather than allowing an unchecked capture through. The model runs on CPU and is
+loaded once on its first eligible capture.
 
 ## First-time Windows setup
 
@@ -229,28 +242,19 @@ devices even when completed sessions are later synchronized to a cloud server.
 
 ## Runtime notes
 
-Finger rings with an unclear opening or missing AprilTag calibration return the
-captured ring image and an explicit dimensions-unavailable reason. The same
-capture then runs stone analysis. Rings with measurable boundaries keep their
-normal dimension-only route. Other measurement failures remain analysis warnings.
+Finger rings are capture-only: dimension, bead, and stone analysis are disabled,
+including for queued captures carrying an older analysis route. Bangles retain
+OD/ID measurement. Other measurement failures remain analysis warnings.
+
+Result images enlarge small crops by at most 2x and leave space around the jewel.
+Stone exports use the selected jewel mask to hide surrounding objects. Stone
+markings are explained in a small neutral footer; dimension exports omit notes.
 
 Stone refinement rejects neutral regions whose original pixels are predominantly
 dark, saturated gold, including gold recesses with small glare highlights. This
 prevents edge enclosure and low LAB chroma from turning warm metal shadows into
 stones. Image analysis cannot guarantee zero false detections for every capture;
 neutral cavities and black stones can have indistinguishable pixels.
-
-To review dimension-rejected dataset rings without changing source captures:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\validate_ring_stones.py
-```
-
-The replay reads `data/ring-validation/report/results.json` and writes a gallery
-to `data/ring-validation/stones/index.html`. Pass `--labels labels.json` with
-source filenames mapped to `true` (stones visible) or `false` (no visible stones)
-to score false positives and false negatives. Unlabelled captures are visual
-review only.
 
 - Default camera: index `0`, 1920x1080 at 30 FPS, displayed with 270-degree rotation.
 - Default scale: `COM12` on Windows, auto-detection on Linux, at 9600 baud;
@@ -261,8 +265,8 @@ review only.
 - Saved camera areas and device settings are stored in `data/settings/app.json`.
 - One capture may contain multiple jewels. Keep a visible background gap between
   jewels so Otsu component separation can assign one box, class, and analysis
-  result to each item. Bangles/rings receive OD/ID analysis; other jewel types
-  receive their configured bead/stone analysis independently.
+  result to each item. Bangles receive OD/ID analysis, finger rings skip analysis,
+  and other jewel types receive their configured bead/stone analysis independently.
 
 ### Bead analysis
 

@@ -15,12 +15,13 @@ import numpy as np
 import onnxruntime as ort
 from PIL import Image
 
-from ..analysis.annotations import (add_side_panel, identify_result_image, jewel_reference,
+from ..analysis.annotations import (identify_result_image, jewel_reference,
                                     render_bead_evidence, render_capture_review)
 from ..analysis.beads import analyze_bead_detections, onnx_image_size, prepare_onnx_input
 from ..analysis.vision import separate_jewellery_items
-from ..core.config import PROJECT_ROOT
-from ..domain.workflow import route_for_label
+from ..analysis.foreign_objects import ForeignObjectDetector
+from ..core.config import PROJECT_ROOT, FOREIGN_OBJECT_MODEL_PATH
+from ..domain.workflow import label_key, route_for_label
 from ..domain.weights import (
     stone_weight_fields,
     weight_summary,
@@ -40,7 +41,6 @@ from Classification.jewelry_classifier import (  # noqa: E402
 )
 from Classification.siglip384_classifier import Siglip384Classifier  # noqa: E402
 from Dimension.bangle_detector import detect_bangle  # noqa: E402
-from Dimension.finger_ring_detector import RingDimensionsUnavailable  # noqa: E402
 import StoneDetection.jewel_gem_hsv_report as stone_detection  # noqa: E402
 
 
@@ -320,6 +320,7 @@ class AnalysisService:
         self._model_lock = threading.RLock()
         self._classifier: JewelryZeroShotClassifier | None = None
         self._beads: OnnxBeadDetector | None = None
+        self._foreign_objects: ForeignObjectDetector | None = None
         self._active_capture: str | None = None
 
     @staticmethod
@@ -333,7 +334,7 @@ class AnalysisService:
         self._executor.shutdown(wait=True, cancel_futures=True)
 
     def preload_models(self) -> None:
-        """Load every inference model once during application startup."""
+        """Preload core models; the foreign-object model loads after the first gate passes."""
         self._get_classifier()
         self._get_beads()
 
@@ -366,6 +367,20 @@ class AnalysisService:
                     providers=self._onnx_providers(),
                 )
             return self._beads
+
+    def _get_foreign_objects(self) -> ForeignObjectDetector:
+        with self._model_lock:
+            if self._foreign_objects is None:
+                self._foreign_objects = ForeignObjectDetector(FOREIGN_OBJECT_MODEL_PATH)
+            return self._foreign_objects
+
+    def _check_foreign_objects(self, state: dict[str, Any]) -> dict[str, Any]:
+        paths = state["paths"]
+        raw = cv2.imread(paths.get("original", ""))
+        testbed_mask = cv2.imread(paths.get("testbed_source_mask", ""), cv2.IMREAD_GRAYSCALE)
+        if raw is None or testbed_mask is None:
+            raise RuntimeError("The raw capture or full-frame testbed mask is unavailable; recapture.")
+        return self._get_foreign_objects().detect(raw, testbed_mask)
 
     def classify(self, capture_id: str) -> dict[str, Any]:
         state = self.repository.get(capture_id)
@@ -487,6 +502,21 @@ class AnalysisService:
             "labels": predicted_labels,
             "items": classified_items,
         }
+        # Any existing Not Gold decision remains authoritative. Run the second
+        # gate once, on the unmodified full frame, only when all items passed.
+        if all(route_for_label(label)["key"] != "no_analysis" for label in predicted_labels):
+            check = self._check_foreign_objects(state)
+            state["foreign_object_check"] = check
+            if not check["passed"]:
+                labels = ", ".join(sorted({d["label"].replace("_", " ") for d in check["detections"]}))
+                state["rejection_reason"] = (
+                    f"This image has other objects with jewellery ({labels}). "
+                    "Remove the other objects from the testbed and recapture."
+                )
+                state["status"] = "rejected"
+                state["updated_at"] = self._now()
+                self.repository.save(state)
+                return state
         annotated_path = self._save_classified_evidence(state, classified_items, confirmed=False)
         state["paths"]["evidence"] = annotated_path
         state["paths"]["classified"] = annotated_path
@@ -507,6 +537,8 @@ class AnalysisService:
         state = self.repository.get(capture_id)
         if not state:
             raise KeyError(capture_id)
+        if state.get("status") == "rejected" or (state.get("foreign_object_check") or {}).get("passed") is False:
+            raise RuntimeError(state.get("rejection_reason") or "Foreign objects detected; recapture.")
         classification = state.get("classification") or {}
         classified_items = classification.get("items") or []
         if not classified_items:
@@ -714,45 +746,17 @@ class AnalysisService:
         calibration = state.get("calibration") or {}
         paths = (item or {}).get("paths") or state["paths"]
         label = str((item or {}).get("confirmed_label") or state["classification"]["confirmed_label"])
+        if label_key(label) in {"finger ring", "ring"}:
+            return {"applicable": False, "status": "skipped", "reason": "Analysis is disabled for finger rings."}
         suffix = f"item_{int(item['index']):02d}" if item else "dimensions"
 
-        def unavailable(reason: str) -> dict[str, Any]:
-            photo = cv2.imread(paths["working"])
-            display_path = paths["working"]
-            if photo is not None:
-                preview = add_side_panel(photo, "DIMENSION ANALYSIS", [
-                    ("OUTER DIAMETER (OD)", "Unavailable"),
-                    ("INNER DIAMETER (ID)", "Unavailable"),
-                ], note=reason)
-                preview = identify_result_image(preview, jewel_reference(item))
-                output = self.repository.session_dir(state["id"]) / "results" / "dimensions" / f"{suffix}.png"
-                output.parent.mkdir(parents=True, exist_ok=True)
-                if cv2.imwrite(str(output), preview):
-                    display_path = str(output)
-            return {
-                "applicable": False,
-                "status": "unavailable",
-                "reason": reason,
-                "outer_diameter_mm": None,
-                "inner_diameter_mm": None,
-                "thickness_mm": None,
-                "image": display_path,
-            }
-
-        if label == "Finger Ring" and not (calibration.get("available") and calibration.get("found")):
-            return unavailable("AprilTag calibration is unavailable. Keep the complete tag visible and capture again for dimensions.")
         mm_per_pixel = _apriltag_scale_mm_per_pixel(calibration)
-        try:
-            result = detect_bangle(
-                paths["working"],
-                scale=mm_per_pixel,
-                debug=False,
-                jewel_type=label,
-            )
-        except RingDimensionsUnavailable as exc:
-            if label != "Finger Ring":
-                raise
-            return unavailable(str(exc))
+        result = detect_bangle(
+            paths["working"],
+            scale=mm_per_pixel,
+            debug=False,
+            jewel_type=label,
+        )
         output = self.repository.session_dir(state["id"]) / "results" / "dimensions" / f"{suffix}.png"
         output.parent.mkdir(parents=True, exist_ok=True)
         annotated = cv2.imread(str(result["annotated_path"]))
@@ -825,6 +829,9 @@ class AnalysisService:
         return result
 
     def _run_stones(self, state: dict[str, Any], item: dict[str, Any] | None = None) -> dict[str, Any]:
+        label = (item or {}).get("confirmed_label") or (state.get("classification") or {}).get("confirmed_label")
+        if label_key(label) in {"finger ring", "ring"}:
+            return {"applicable": False, "status": "skipped", "reason": "Analysis is disabled for finger rings."}
         # Keep the real weighing-platform pixels available to the stone
         # pipeline.  The prepared image replaces everything outside the Otsu
         # mask with pure white, which prevents the background-match cleanup
@@ -933,6 +940,10 @@ class AnalysisService:
             return
         try:
             classified_items = (state.get("classification") or {}).get("items") or []
+            # Also enforce the current policy for queued captures with old routes.
+            for item in classified_items:
+                if label_key(item.get("confirmed_label")) in {"finger ring", "ring"}:
+                    item["route"] = route_for_label(item["confirmed_label"])
             result_items: list[dict[str, Any]] = []
             completed_steps = 0
             total_steps = max(1, sum(
@@ -968,15 +979,6 @@ class AnalysisService:
                     )
                     try:
                         item_result[key] = operation(state, item)
-                        if (
-                            key == "dimensions"
-                            and item["confirmed_label"] == "Finger Ring"
-                            and item_result[key].get("applicable") is False
-                            and not route.get("stones")
-                        ):
-                            route["stones"] = True
-                            route["stone_reason"] = "ring_dimensions_unavailable"
-                            total_steps += 1
                     except Exception as exc:  # Keep mixed-item analysis progressing.
                         item_result["errors"].append({"stage": key, "message": str(exc)})
                     completed_steps += 1
@@ -995,11 +997,12 @@ class AnalysisService:
                         result[key] = result_items[0][key]
             state = self.repository.get(capture_id) or state
             state["result"] = result
-            # Persist the actual route so weights, reports and reopened results
-            # include stone analysis when ring dimensions were unavailable.
+            # Persist the current routing policy for reports and reopened results.
             for item, item_result in zip((state.get("classification") or {}).get("items") or [], result_items):
                 item["route"] = item_result["route"]
             state.setdefault("route", {}).update({
+                "dimension": any(item["route"].get("dimension") for item in result_items),
+                "beads": any(item["route"].get("beads") for item in result_items),
                 "stones": any(item["route"].get("stones") for item in result_items),
                 "items": [item["route"] for item in result_items],
             })

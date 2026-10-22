@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 
-DIMENSION_LABELS = {"bangle", "finger ring"}
+DIMENSION_LABELS = {"bangle"}
 BEAD_LABELS = {
     "chain necklace",
     # Keep historical records routable even though these are no longer exposed
@@ -26,6 +26,13 @@ def label_key(value: str | None) -> str:
 
 def route_for_label(label: str) -> dict[str, Any]:
     key = label_key(label)
+    if key in {"finger ring", "ring"}:
+        return {
+            "key": "capture_only",
+            "dimension": False,
+            "beads": False,
+            "stones": False,
+        }
     if key == "not gold jewelry":
         return {
             "key": "no_analysis",

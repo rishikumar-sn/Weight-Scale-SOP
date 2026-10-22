@@ -5,6 +5,8 @@ import numpy as np
 import pytest
 from PIL import ImageDraw
 
+# Initialize the optional stone pipeline imports exactly as the app does.
+from backend.app.services.analysis_service import AnalysisService
 from backend.app.analysis import annotations
 from Dimension.bangle_detector import draw_results
 from StoneDetection import jewel_gem_hsv_report as stones
@@ -147,6 +149,60 @@ def test_dimension_render_does_not_modify_fitted_geometry_or_input():
     assert result == saved and np.all(photo == 255)
 
 
+def test_small_jewel_zoom_is_capped_and_neighbour_is_hidden():
+    source = np.full((100, 100, 3), 255, np.uint8)
+    source[30:70, 30:70] = (20, 90, 160)
+    source[10:25, 75:95] = (255, 0, 0)  # Another object outside this jewel's mask.
+    alpha = np.zeros((100, 100, 4), np.uint8)
+    alpha[30:70, 30:70, 3] = 255
+    saved = source.copy()
+    output = stones.build_result_gallery([dict(
+        jewel_id=1, overlay_bgr=source, masked_bgra=alpha, detected_colors=[]
+    )])
+    photo = output[156:1000, 12:852]
+    jewel_pixels = np.all(photo == (20, 90, 160), axis=2)
+    points = cv2.findNonZero(jewel_pixels.astype(np.uint8))
+    _, _, width, height = cv2.boundingRect(points)
+    assert 70 <= width <= 80 and 70 <= height <= 80
+    assert not np.any(np.all(photo == (255, 0, 0), axis=2))
+    np.testing.assert_array_equal(source, saved)
+
+
+def test_stone_note_is_small_neutral_footer_and_empty_results_have_none(monkeypatch):
+    texts = []
+    original = ImageDraw.ImageDraw.text
+    def record(self, xy, value, *args, **kwargs):
+        texts.append((xy, value, kwargs))
+        return original(self, xy, value, *args, **kwargs)
+    monkeypatch.setattr(ImageDraw.ImageDraw, "text", record)
+    view = dict(jewel_id=1, overlay_bgr=np.full((100, 100, 3), 255, np.uint8), detected_colors=[{"color": "Green"}])
+    output = stones.build_result_gallery([view])
+    notes = [(xy, value, kwargs) for xy, value, kwargs in texts if value.startswith("Note:")]
+    assert len(notes) == 1
+    xy, value, style = notes[0]
+    assert "green regions" in value
+    assert xy[1] >= output.shape[0] - 80
+    assert style["font"].size == 20 and style["fill"] == "#617083"
+    assert not np.any(np.all(output == (243, 240, 255), axis=2))  # Old pink note card.
+    texts.clear()
+    stones.build_result_gallery([{**view, "detected_colors": []}])
+    assert not any("Note:" in value or "NOTE" == value for _, value, _ in texts)
+
+
+def test_dimension_export_omits_notes_even_when_supplied(monkeypatch):
+    texts = []
+    original = ImageDraw.ImageDraw.text
+    def record(self, xy, value, *args, **kwargs):
+        texts.append(value)
+        return original(self, xy, value, *args, **kwargs)
+    monkeypatch.setattr(ImageDraw.ImageDraw, "text", record)
+    annotations.add_side_panel(np.full((100, 100, 3), 255, np.uint8),
+                               "DIMENSION ANALYSIS", [("NOTE", "Old note"), ("OUTER", "60 mm")],
+                               note="Geometry explanation")
+    assert "60 mm" in texts
+    assert not any("note" in value.lower() or "Geometry" in value for value in texts)
+
+
 def test_stone_mask_fill_is_52_percent_and_contour_one_pixel():
     source = np.full((100, 100, 3), (70, 55, 150), np.uint8)
     mask = np.zeros((100, 100), np.uint8)
@@ -165,7 +221,6 @@ def test_stone_mask_fill_is_52_percent_and_contour_one_pixel():
 
 def test_rejected_review_only_updates_display_path_and_preserves_original(tmp_path, monkeypatch):
     from types import SimpleNamespace
-    from backend.app.services.analysis_service import AnalysisService
     path = tmp_path / "original.png"
     cv2.imwrite(str(path), np.full((200, 300, 3), 180, np.uint8))
     original_bytes = path.read_bytes()

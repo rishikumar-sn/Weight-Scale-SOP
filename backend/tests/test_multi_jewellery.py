@@ -327,6 +327,7 @@ def test_mixed_foreign_and_gold_capture_keeps_preview_and_confirmation(monkeypat
     monkeypatch.setattr("backend.app.services.analysis_service.separate_jewellery_items", lambda *_a, **_kw: separated)
     monkeypatch.setattr(service, "_get_classifier", lambda: Classifier())
     monkeypatch.setattr(service, "_save_classified_evidence", lambda *_a, **_kw: "mixed-preview.jpg")
+    monkeypatch.setattr(service, "_get_foreign_objects", lambda: pytest.fail("Existing rejection must skip the second model"))
     monkeypatch.setattr(service, "_save_rejected_review", lambda *_a: pytest.fail("No rejection preview"))
     try:
         state = service.classify("mixed")

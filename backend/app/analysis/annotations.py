@@ -198,9 +198,15 @@ def add_side_panel(image: np.ndarray, title: str, fields: list[tuple[str, str]],
     stage = 2 if "BEAD" in title_upper else 3 if "STONE" in title_upper else 4 if "DIMENSION" in title_upper else 1
     heading = {1: title_upper, 2: title_upper, 3: "STONE ANALYSIS", 4: "DIMENSION ANALYSIS"}[stage]
     rows = list(fields)
+    # Notes are quiet footer text, never a result card. Dimensions need none.
+    notes = [str(value) for caption, value in rows if caption.upper() == "NOTE"]
+    rows = [(caption, value) for caption, value in rows if caption.upper() != "NOTE"]
     if note:
-        rows.append(("NOTE", note))
+        notes.append(note)
+    footer = " ".join(notes) if stage != 4 else ""
     draw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    footer_lines = _wrap(draw, f"Note: {footer}", font(20), right - panel_x - 24) if footer else []
+    footer_height = len(footer_lines) * 27 + 24 if footer_lines else 0
     total = None
     if stage == 2:
         total_value = next((v for k, v in fields if k in {"DETECTED", "BEADS DETECTED"}), None)
@@ -229,10 +235,10 @@ def add_side_panel(image: np.ndarray, title: str, fields: list[tuple[str, str]],
         if item_rows and caption.startswith("JEWELLERY TYPES"):
             min_height = 28 + len(caption_lines) * 36 + 18 + sum(len(lines) * 42 + 12 for _, lines in item_rows) + 20
         prepared.append((caption, caption_lines, value_lines, value_size, secondary, progress, kind, min_height, value))
-    natural_height = (height - top - 26 - gap * max(0, len(prepared) - 1)) / max(1, len(prepared))
+    natural_height = (height - top - 26 - footer_height - gap * max(0, len(prepared) - 1)) / max(1, len(prepared))
     # Three large, spaced cards or four compact cards, matching the supplied screens.
     heights = [max(row[7], 132 if item_rows else min(244, int(natural_height))) for row in prepared]
-    height = max(height, top + sum(heights) + gap * max(0, len(prepared) - 1) + 26)
+    height = max(height, top + sum(heights) + gap * max(0, len(prepared) - 1) + 26 + footer_height)
     canvas = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(canvas)
     for yy in range(header):
@@ -257,9 +263,10 @@ def add_side_panel(image: np.ndarray, title: str, fields: list[tuple[str, str]],
     photo = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
     # Display resampling only: both enlargement and reduction preserve aspect ratio.
     photo_height = min(height, 1024) - header - 24 if item_rows else height - header - 24
-    photo.thumbnail((split - 24, photo_height), Image.Resampling.LANCZOS)
-    factor = min((split - 24) / photo.width, photo_height / photo.height)
-    if factor > 1:
+    # Leave breathing room and limit enlargement of small camera crops.
+    inset = .80 if stage in {2, 3, 4} else 1.
+    factor = min(2., (split - 24) * inset / photo.width, photo_height * inset / photo.height)
+    if factor != 1:
         photo = photo.resize((round(photo.width * factor), round(photo.height * factor)), Image.Resampling.LANCZOS)
     canvas.paste(photo, (12 + (split - 24 - photo.width) // 2, header + 12 + (photo_height - photo.height) // 2))
     draw.line((split, header + 8, split, height - 8), fill="#E5EBF1", width=2)
@@ -270,8 +277,6 @@ def add_side_panel(image: np.ndarray, title: str, fields: list[tuple[str, str]],
         fill, ink = "#F0F4F8", "#14283E"
         if caption in {"RESULT", "ASSESSMENT"} and "high" in raw_value.lower():
             fill, ink, color = "#FFF0F3", "#D81D42", "#D81D42"
-        elif caption == "NOTE":
-            fill, color = ("#FFF0F3", "#D81D42") if stage == 3 else ("#E7F1FF", "#2684EF")
         elif caption == "IMAGE CONTENT":
             color = "#08A57F" if presence_ok is True else "#C63D4B" if presence_ok is False else "#617083"
         draw.rounded_rectangle((panel_x, y, right, y + row_height), radius=24, fill=fill)
@@ -309,6 +314,9 @@ def add_side_panel(image: np.ndarray, title: str, fields: list[tuple[str, str]],
                 end = text_x + max(17, round((text_right - text_x) * min(1., share)))
                 draw.rounded_rectangle((text_x, bar_y, end, bar_y + 17), radius=8, fill=color)
         y += row_height + gap
+    for index, line in enumerate(footer_lines):
+        draw.text((panel_x + 12, height - footer_height + index * 27), line,
+                  font=font(20), fill="#617083", anchor="lt")
     return cv2.cvtColor(np.asarray(canvas), cv2.COLOR_RGB2BGR)
 
 

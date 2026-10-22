@@ -213,7 +213,7 @@ export default function App() {
       setLive(payload);
       setActive((current) => {
         if (current && payload.latest?.id === current.id) return payload.latest;
-        if (!current && payload.latest && ["processing", "awaiting_confirmation"].includes(payload.latest.status)) {
+        if (!current && payload.latest && ["processing", "awaiting_confirmation", "rejected"].includes(payload.latest.status)) {
           return payload.latest;
         }
         return current;
@@ -402,6 +402,11 @@ export default function App() {
       setMessage("Checking the item type...");
       const classified = await requestJson(`/api/captures/${captured.id}/item-type`, { method: "POST" });
       setActive(classified);
+      if (classified.status === "rejected") {
+        setItemCorrections({});
+        setMessage(classified.rejection_reason);
+        return;
+      }
       setItemCorrections(Object.fromEntries(
         (classified.classification.items || []).map((item: any) => [item.index, item.predicted_label]),
       ));
@@ -491,6 +496,7 @@ export default function App() {
 
   const stage = useMemo(() => {
     if (!active) return "capture";
+    if (active.status === "rejected") return "rejected";
     if (active.status === "awaiting_confirmation") return "confirm";
     if (["processing"].includes(active.status)) return "processing";
     if (active.status === "complete") return "results";
@@ -680,6 +686,18 @@ export default function App() {
                   {busy ? "Please wait..." : "Capture jewellery"}
                 </button>
                 {!rois.apriltag && <p className="hint">Keep the AprilTag visible so its area can be detected automatically.</p>}
+              </div>
+            )}
+
+            {captureTab === "jewellery" && stage === "rejected" && (
+              <div className="rejectedReview">
+                <span className="eyebrow errorText">Recapture required</span>
+                <h2>Other objects detected with jewellery</h2>
+                <p role="alert">{active?.rejection_reason}</p>
+                <ResultImage src={media.evidence} alt="Capture containing other objects with jewellery" label="Captured evidence" />
+                <button className="primary" onClick={recapture} disabled={busy || !cameraReady || !live.scale?.connected || !rois.apriltag}>
+                  {busy ? "Please wait..." : "Recapture image"}
+                </button>
               </div>
             )}
 

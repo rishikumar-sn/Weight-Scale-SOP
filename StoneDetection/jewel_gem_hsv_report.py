@@ -4622,6 +4622,8 @@ def build_result_gallery(jewel_views: list[dict], summary_fields: list[tuple[str
         source = view["overlay_bgr"]
         alpha = view.get("masked_bgra")
         if alpha is not None and alpha.shape[:2] == source.shape[:2]:
+            source = source.copy()
+            source[alpha[:, :, 3] == 0] = 255
             points = cv2.findNonZero((alpha[:, :, 3] > 0).astype(np.uint8))
             if points is not None:
                 x, y, w, h = cv2.boundingRect(points)
@@ -4633,8 +4635,7 @@ def build_result_gallery(jewel_views: list[dict], summary_fields: list[tuple[str
         learned = gallery_learned_text(view.get("learned_representations") or [])
         if learned:
             fields.append(("LEARNED REFERENCES", learned))
-        note = ("Accepted stone regions are highlighted in green." if view.get("detected_colors")
-                else "No accepted stone regions to highlight.")
+        note = "Detected stones are marked as green regions." if view.get("detected_colors") else None
         tile = add_side_panel(source, "STONE ANALYSIS", fields, note=note)
         reference = item_reference or f"J{view['jewel_id']}"
         if item_reference and len(jewel_views) > 1:

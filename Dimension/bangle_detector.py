@@ -1133,16 +1133,13 @@ def draw_results(
     x, y = min(b[0] for b in bounds), min(b[1] for b in bounds)
     out = display_crop(out, dict(x=x, y=y, w=max(b[2] for b in bounds) - x,
                                  h=max(b[3] for b in bounds) - y), padding=.055)
-    geometry_note = ("Diameters are calculated from the fitted ellipse axes."
-                     if outer.ellipse is not None or inner.ellipse is not None else
-                     "Dimensions are measured on the detected outer and inner circular boundaries.")
     out = add_side_panel(out, "DIMENSION ANALYSIS", [
         ("OUTER DIAMETER (OD)", measurement("od")),
         ("INNER DIAMETER (ID)", measurement("id")),
     ], field_colors={
         "OUTER DIAMETER (OD)": tuple(reversed(colors[0])),
         "INNER DIAMETER (ID)": tuple(reversed(colors[1])),
-    }, note=geometry_note)
+    })
 
     return out
 
