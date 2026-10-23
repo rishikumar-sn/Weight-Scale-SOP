@@ -53,29 +53,32 @@ def detect_apriltag(
     if not hasattr(cv2, "aruco") or not hasattr(cv2.aruco, "DICT_APRILTAG_36h11"):
         raise RuntimeError("AprilTag support is unavailable in OpenCV")
     dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36h11)
-    parameters = cv2.aruco.DetectorParameters()
-    parameters.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
-    detector = cv2.aruco.ArucoDetector(dictionary, parameters)
+    detectors = []
+    # APRILTAG selects AprilTag's quad detector, not just a corner refinement.
+    # It finds the small printed platform marker that the default ArUco contour
+    # detector can reject. Keep the contour detector as a compatibility fallback.
+    for method in (cv2.aruco.CORNER_REFINE_APRILTAG, cv2.aruco.CORNER_REFINE_SUBPIX):
+        parameters = cv2.aruco.DetectorParameters()
+        parameters.cornerRefinementMethod = method
+        detectors.append(cv2.aruco.ArucoDetector(dictionary, parameters))
 
     # The configured ROI is a speed hint, not a hard dependency. Camera or
     # platform movement can leave the tag visible while making that crop too
     # tight for AprilTag's required surrounding border. Retry on the complete
     # frame before declaring calibration unavailable.
-    detection_roi = roi
-    region = crop(image, detection_roi)
-    gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
-    corners, ids, _ = detector.detectMarkers(gray)
-    if ids is None and detection_roi is not None:
-        detection_roi = None
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        corners, ids, _ = detector.detectMarkers(gray)
-    if ids is None:
-        raise RuntimeError("AprilTag was not found")
-    ids_flat = ids.reshape(-1).tolist()
-    if marker_id not in ids_flat:
+    selected = None
+    for detection_roi in ([roi, None] if roi is not None else [None]):
+        gray = cv2.cvtColor(crop(image, detection_roi), cv2.COLOR_BGR2GRAY)
+        for detector in detectors:
+            corners, ids, _ = detector.detectMarkers(gray)
+            if ids is not None and marker_id in ids.reshape(-1).tolist():
+                selected = corners[ids.reshape(-1).tolist().index(marker_id)][0]
+                break
+        if selected is not None:
+            break
+    if selected is None:
         raise RuntimeError(f"AprilTag {marker_id} was not found")
-    index = ids_flat.index(marker_id)
-    points = corners[index][0].astype(np.float32)
+    points = selected.astype(np.float32)
     if detection_roi:
         points[:, 0] += detection_roi["x"]
         points[:, 1] += detection_roi["y"]

@@ -50,7 +50,7 @@ class PacketScanService:
                 raise RuntimeError(f"Packet OCR is unavailable: {error}")
             return {
                 "status": result.status,
-                "packet_number": result.ocr or None,
+                "packet_number": result.ocr or result.barcode or None,
                 "barcode": result.barcode or None,
                 "barcode_format": result.barcode_format or None,
                 "barcode_matched": result.status == "MATCH",

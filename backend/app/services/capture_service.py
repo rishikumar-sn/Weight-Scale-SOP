@@ -4,6 +4,7 @@ import json
 import uuid
 from datetime import datetime
 from pathlib import Path
+from threading import RLock
 from typing import Any
 
 import cv2
@@ -20,7 +21,7 @@ from ..analysis.vision import (
     translate_roi_to_crop,
 )
 from ..analysis.testbed_segmentation import TestbedSegmenter
-from ..core.config import TESTBED_MODEL_PATH
+from ..core.config import TESTBED_MODEL_PATHS
 from .packet_scan_service import PacketScanService
 from .report_service import ReportService
 
@@ -35,11 +36,24 @@ class CaptureService:
         self.packet_scanner = PacketScanService()
         self.reports = ReportService()
         self._testbed_segmenter: TestbedSegmenter | None = None
+        self._testbed_lock = RLock()
 
-    def _get_testbed_segmenter(self) -> TestbedSegmenter:
-        if self._testbed_segmenter is None:
-            self._testbed_segmenter = TestbedSegmenter(TESTBED_MODEL_PATH)
-        return self._testbed_segmenter
+    def _get_testbed_segmenter(self, model: str | None = None) -> TestbedSegmenter:
+        with self._testbed_lock:
+            model = model or self.settings_store.get()["scale"].get("model", "embsys_wm")
+            path = TESTBED_MODEL_PATHS[model]
+            if self._testbed_segmenter is None or self._testbed_segmenter.model_path != path:
+                # Drop the previous ONNX session before loading the other scale.
+                self._testbed_segmenter = None
+                self._testbed_segmenter = TestbedSegmenter(path, inset_px=12 if model == "essae_jx500" else 2)
+            return self._testbed_segmenter
+
+    def apply_scale(self, model: str) -> dict[str, Any]:
+        with self._testbed_lock:
+            if model not in TESTBED_MODEL_PATHS:
+                raise ValueError("Unsupported scale model")
+            self._get_testbed_segmenter(model)
+            return self.settings_store.select_scale(model)
 
     @staticmethod
     def _save(path: Path, image: np.ndarray) -> str:
@@ -149,10 +163,14 @@ class CaptureService:
         session_dir = self.repository.session_dir(capture_id)
         source_dir = session_dir / "capture"
         source_dir.mkdir(parents=True, exist_ok=True)
-        settings = self.settings_store.get()
+        with self._testbed_lock:
+            settings = self.settings_store.get()
+            segmenter = self._get_testbed_segmenter()
+            testbed = segmenter.segment(frame)
+            testbed_model_path = segmenter.model_path
+            del segmenter
         height, width = frame.shape[:2]
         apriltag_roi = roi_to_pixels(settings["rois"].get("apriltag"), width, height)
-        testbed = self._get_testbed_segmenter().segment(frame)
         processing = testbed.image
         processing_roi = testbed.processing_roi
         effective_apriltag_roi = apriltag_roi
@@ -219,7 +237,7 @@ class CaptureService:
                 "working_apriltag": working_tag_roi,
             },
             "testbed": {
-                "model": str(TESTBED_MODEL_PATH),
+                "model": str(testbed_model_path),
                 "confidence": testbed.confidence,
                 "masking": "polygon_with_white_square_padding",
             },

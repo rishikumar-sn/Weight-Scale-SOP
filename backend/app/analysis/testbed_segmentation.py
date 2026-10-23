@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -22,7 +23,7 @@ class TestbedRoi:
 
 
 class TestbedSegmenter:
-    """Decode a one-class Ultralytics YOLOv8 segmentation ONNX export."""
+    """Decode Ultralytics segmentation exports, excluding the circular tray hole."""
 
     __test__ = False
 
@@ -52,6 +53,15 @@ class TestbedSegmenter:
         self.input_name = model_input.name
         self.input_height = int(shape[2])
         self.input_width = int(shape[3])
+        names = ast.literal_eval(self.session.get_modelmeta().custom_metadata_map.get("names", "{0: 'test-bed'}"))
+        self.names = dict(enumerate(names)) if isinstance(names, list) else names
+        if set(self.names) != set(range(len(self.names))):
+            raise RuntimeError(f"Unsupported segmentation classes: {self.names}")
+        normalized = {str(name).lower().replace("-", "").replace("_", "").replace(" ", ""): key
+                      for key, name in self.names.items()}
+        # ForeignObjectDetector also reuses this decoder for its own class set.
+        self.testbed_class_id = normalized.get("testbed", 0)
+        self.circle_class_id = normalized.get("circle")
 
     def segment(self, image_bgr: np.ndarray) -> TestbedRoi:
         if image_bgr is None or image_bgr.ndim != 3 or image_bgr.shape[2] != 3:
@@ -62,9 +72,28 @@ class TestbedSegmenter:
         if len(outputs) < 2:
             raise RuntimeError("Testbed model did not return detection and mask outputs")
         prediction, prototypes = outputs[:2]
+        if prediction.shape[1] != 4 + len(self.names) + prototypes.shape[1]:
+            raise RuntimeError(f"Unsupported segmentation outputs: {prediction.shape}, {prototypes.shape}")
         row, box, confidence = self._best_detection(prediction)
-        source_mask = self._decode_mask(row[5:], prototypes, box, transform, image_bgr.shape[:2])
-        source_mask = self._clean_mask(source_mask)
+        coefficient_start = 4 + len(self.names)
+        source_mask = self._decode_mask(row[coefficient_start:], prototypes, box, transform, image_bgr.shape[:2])
+        source_mask = self._clean_mask(source_mask, fill_holes=self.circle_class_id is not None)
+        if self.circle_class_id is not None:
+            try:
+                circle_row, circle_box, _ = self._best_detection(prediction, self.circle_class_id)
+            except RuntimeError as exc:
+                raise RuntimeError("Testbed circular hole was not detected; keep the hole visible and recapture") from exc
+            hole = self._decode_mask(circle_row[coefficient_start:], prototypes, circle_box,
+                                     transform, image_bgr.shape[:2])
+            if not np.any(hole & source_mask):
+                raise RuntimeError("Detected circular hole does not overlap the testbed; recapture")
+            # Fill missing hole pixels, then expand its boundary so its rim cannot
+            # become jewellery. Subtract AFTER platform closing/erosion.
+            contours, _ = cv2.findContours(hole, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cv2.drawContours(hole, contours, -1, 1, cv2.FILLED)
+            size = self.inset_px * 2 + 1
+            hole = cv2.dilate(hole, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size)))
+            source_mask[hole > 0] = 0
         if not np.any(source_mask):
             raise RuntimeError("The detected testbed mask is empty")
         return self._square_roi(image_bgr, source_mask, confidence)
@@ -91,7 +120,7 @@ class TestbedSegmenter:
         }
 
     def _best_detection(
-        self, prediction: np.ndarray
+        self, prediction: np.ndarray, class_id: int | None = None
     ) -> tuple[np.ndarray, np.ndarray, float]:
         rows = np.asarray(prediction, dtype=np.float32)
         if rows.ndim != 3 or rows.shape[0] != 1:
@@ -99,8 +128,11 @@ class TestbedSegmenter:
         rows = rows[0].T
         if rows.shape[1] < 6:
             raise RuntimeError(f"Unsupported testbed prediction width: {rows.shape[1]}")
-        scores = rows[:, 4]
-        valid = np.flatnonzero(np.isfinite(scores) & (scores >= self.confidence_threshold))
+        if class_id is None:
+            class_id = getattr(self, "testbed_class_id", 0)
+        scores = rows[:, 4 + class_id]
+        valid = np.flatnonzero(np.isfinite(rows).all(axis=1) & (scores >= self.confidence_threshold)
+                               & (rows[:, 2] > 0) & (rows[:, 3] > 0))
         if not len(valid):
             best = float(np.nanmax(scores)) if scores.size else 0.0
             raise RuntimeError(
@@ -156,13 +188,18 @@ class TestbedSegmenter:
         mask = cv2.resize(mask, (source_width, source_height), interpolation=cv2.INTER_LINEAR)
         return (mask >= self.mask_threshold).astype(np.uint8)
 
-    def _clean_mask(self, mask: np.ndarray) -> np.ndarray:
+    def _clean_mask(self, mask: np.ndarray, *, fill_holes: bool = False) -> np.ndarray:
         binary = (mask > 0).astype(np.uint8)
         count, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
         if count <= 1:
             return np.zeros_like(binary)
         largest = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
         binary = (labels == largest).astype(np.uint8)
+        if fill_holes:
+            # Objects on the platform may leave gaps in its prediction. Restore
+            # the interior before subtracting the independently detected hole.
+            contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cv2.drawContours(binary, contours, -1, 1, cv2.FILLED)
         binary = cv2.morphologyEx(
             binary,
             cv2.MORPH_CLOSE,

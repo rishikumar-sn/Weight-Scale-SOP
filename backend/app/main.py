@@ -211,7 +211,10 @@ def save_camera_flicker(payload: CameraFlickerSettings):
 
 @app.put("/api/settings/scale")
 def save_scale(payload: ScaleSettings):
-    saved = settings_store.select_scale(payload.model)
+    try:
+        saved = captures.apply_scale(payload.model)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Could not load scale testbed model: {exc}") from exc
     scale.request_reconnect()
     return {"settings": saved, "scale": scale.snapshot()}
 

@@ -16,6 +16,21 @@ from backend.app.packet_scanner.ocr_reader import OCRReader
 
 
 class TarePacketCaptureTests(unittest.TestCase):
+    def test_barcode_supplies_packet_number_when_ocr_cannot_read(self):
+        service = PacketScanService()
+        service._scanner = Mock()
+        service._scanner.ocr_error = ""
+        service._scanner.scan.return_value = Mock(
+            status="BARCODE_ONLY", ocr="", barcode="01234567",
+            barcode_format="Code128", message="Barcode read; printed packet ID could not be verified.",
+            ocr_confidence=0.0, detection_confidence=0.95, blur_score=80.0,
+            provider="CPUExecutionProvider", detections=[],
+        )
+        packet = service.scan(np.zeros((100, 100, 3), dtype=np.uint8))
+        self.assertEqual(packet["packet_number"], "01234567")
+        self.assertEqual(packet["status"], "BARCODE_ONLY")
+        self.assertFalse(packet["barcode_matched"])
+
     def test_quick_ocr_rejects_a_lower_confidence_match(self):
         reader = OCRReader.__new__(OCRReader)
         reader._items = Mock(return_value=iter([
@@ -77,6 +92,7 @@ class TarePacketCaptureTests(unittest.TestCase):
 
             for mode in ("pledge", "release"):
                 state = service.capture_tare(mode)
+                camera.snapshot_frame.assert_called_with()
                 self.assertEqual(state["result"]["packet"]["packet_number"], "41233285")
                 self.assertTrue(state["result"]["packet"]["barcode_matched"])
                 self.assertEqual(state["tare_mode"], mode)

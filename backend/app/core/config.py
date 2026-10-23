@@ -16,6 +16,10 @@ FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
 SETTINGS_PATH = SETTINGS_DIR / "app.json"
 DATABASE_PATH = DATA_DIR / "app.db"
 TESTBED_MODEL_PATH = PROJECT_ROOT / "models" / "segmentation" / "testbed.onnx"
+TESTBED_MODEL_PATHS = {
+    "embsys_wm": TESTBED_MODEL_PATH,
+    "essae_jx500": PROJECT_ROOT / "models" / "segmentation" / "essaetestbed.onnx",
+}
 FOREIGN_OBJECT_MODEL_PATH = PROJECT_ROOT / "models" / "segmentation" / "anomolies.onnx"
 
 DEFAULT_SETTINGS: dict[str, Any] = {

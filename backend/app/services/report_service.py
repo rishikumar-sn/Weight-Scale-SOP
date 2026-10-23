@@ -77,29 +77,22 @@ class ReportService:
         draw.text((x, px(48)), f"{mode} TARE CAPTURE", fill="#C9D4E3", font=self._result_font(px(26), True))
         draw.text((x, px(102)), "Packet Summary", fill="white", font=self._fit_text(draw, "Packet Summary", width, px(50), True))
 
-        def card(top: int, height: int, label: str, value: str, color: str = ink) -> int:
+        def card(top: int, height: int, label: str, value: str, color: str = ink, note: str = "") -> int:
             draw.rounded_rectangle((x, top, right, top + height), radius=px(18), fill="white", outline="#DCE3EA", width=px(2))
             draw.rectangle((x, top + px(12), x + px(8), top + height - px(12)), fill=gold)
             draw.text((x + px(27), top + px(24)), label, fill=muted, font=self._result_font(px(23), True))
             draw.text((x + px(27), top + px(72)), value, fill=color,
                       font=self._fit_text(draw, value, width - px(55), px(48), True))
+            if note:
+                draw.text((x + px(27), top + px(140)), note, fill="#167D5A",
+                          font=self._result_font(px(23)))
             return top + height + px(22)
 
         top = px(290)
-        number = str(packet.get("packet_number") or "Unavailable")
-        top = card(top, px(164), "PACKET NUMBER (OCR)", number)
-        status = str(packet.get("status") or "NOT_FOUND")
-        status_text = {
-            "MATCH": "BARCODE MATCHED",
-            "MISMATCH": "BARCODE MISMATCH",
-            "BARCODE_ONLY": "BARCODE ONLY",
-            "OCR_ONLY": "BARCODE NOT READ",
-            "NOT_FOUND": "PACKET NOT READ",
-        }.get(status, "NOT VERIFIED")
-        status_color = "#167D5A" if status == "MATCH" else "#B24C37"
-        top = card(top, px(164), "BARCODE CHECK", status_text, status_color)
-        barcode = str(packet.get("barcode") or "Unavailable")
-        top = card(top, px(164), "BARCODE DIGITS", barcode)
+        number = str(packet.get("packet_number") or packet.get("barcode") or "Unavailable")
+        matched = packet.get("status") == "MATCH"
+        top = card(top, px(190) if matched else px(164), "PACKET NO.", number,
+                   note="barcode is matched" if matched else "")
         weight = state.get("weight_g")
         weight_text = f"{float(weight):.2f} g" if weight is not None else "Unavailable"
         top = card(top, px(164), "TARE WEIGHT", weight_text)

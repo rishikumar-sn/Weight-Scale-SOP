@@ -101,6 +101,15 @@ in the current OS hardware profile and reconnects the serial reader immediately.
 Startup restores that selection. Switching models preserves each model's serial
 settings; existing installations keep EMBSYS WM selected by default.
 
+Applying a scale also loads its testbed ROI model and releases the previous
+model: EMBSYS uses `models/segmentation/testbed.onnx`; ESSAE uses
+`models/segmentation/essaetestbed.onnx`. Captures restore the matching model
+after startup. ESSAE fills gaps inside the platform mask, trims its outer edge
+by 12 pixels, and excludes the detected `Circle` with a 12-pixel margin.
+Excluded pixels are white and ignored throughout jewellery and foreign-object
+analysis. Keep the circular hole visible: if it cannot be detected, capture
+asks for a recapture instead of processing the hole as jewellery.
+
 ESSAE uses the existing Arduino/USB decoder output at 115200 baud, including
 lines such as `1026 ms WEIGHT = 3.640 g RAW: ...`. It ignores startup/debug
 lines, handles fragmented lines, and displays both `g` and `ct` with three
@@ -142,6 +151,12 @@ included. Result images keep every jewellery row, growing vertically when needed
 instead of cutting off entries after the available space is filled.
 
 ## Tare packet identifiers and replay
+
+Tare captures use the same full-resolution processed camera frame as jewellery
+captures, including the active Windows or Linux exposure, rotation, flicker
+correction and averaging settings. Barcode verification is optional: the result
+image shows the packet number, with a small confirmation only when the barcode
+and printed packet ID match.
 
 The packet scanner accepts the original 7- or 8-digit numbers and alphanumeric
 IDs of 7 to 32 characters, including separators `-`, `/`, `.`, and `_` (for

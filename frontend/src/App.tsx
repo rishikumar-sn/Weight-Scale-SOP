@@ -310,9 +310,9 @@ export default function App() {
       context.strokeRect(x, y, width, height);
     };
     const shown = setupOpen && settingsSection === "areas" ? draftRois : rois;
-    render(shown.apriltag, "#6bc9aa");
+    if (captureTab === "jewellery") render(shown.apriltag, "#6bc9aa");
     if (setupOpen && settingsSection === "areas") render(shown.processing, "#edbc63");
-  }, [rois, draftRois, setupOpen, settingsSection, videoContentRect]);
+  }, [rois, draftRois, setupOpen, settingsSection, videoContentRect, captureTab]);
 
   useEffect(() => {
     drawRois();
