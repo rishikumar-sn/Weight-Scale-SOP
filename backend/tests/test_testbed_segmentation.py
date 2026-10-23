@@ -88,3 +88,48 @@ def test_essae_class_order_gap_filling_and_hole_margin() -> None:
 def test_essae_missing_hole_blocks_capture() -> None:
     with pytest.raises(RuntimeError, match="circular hole was not detected"):
         essae_segmenter(.2).segment(np.zeros((100, 100, 3), np.uint8))
+
+
+@pytest.mark.parametrize("scale", [1, 2])
+def test_scaled_outer_margin_removes_rim_without_erasing_interior_jewel(scale) -> None:
+    from backend.app.analysis.vision import build_jewellery_mask, separate_jewellery_items
+
+    segmenter = TestbedSegmenter.__new__(TestbedSegmenter)
+    segmenter.inset_px = 12
+    segmenter.outer_inset_ratio = .035
+    image = np.full((900 * scale, 900 * scale, 3), 180, np.uint8)
+    platform = np.zeros(image.shape[:2], np.uint8)
+    platform[10 * scale:890 * scale, 10 * scale:890 * scale] = 1
+    # A neutral raised rim sits inside the model's platform polygon.
+    cv2.rectangle(image, (10 * scale, 10 * scale), (889 * scale, 889 * scale),
+                  (70, 70, 70), 54 * scale)
+    cv2.circle(image, (450 * scale, 450 * scale), 100 * scale, (20, 130, 190), 18 * scale)
+
+    result = segmenter._square_roi(image, segmenter._clean_mask(platform), .9)
+    prepared, mask = build_jewellery_mask(result.image, (1 - result.mask) * 255)
+    items = separate_jewellery_items(result.image, mask, min_area_px=350)
+
+    assert len(items) == 1
+    assert items[0]["bbox"]["w"] < 300 * scale
+    assert not np.any(mask[:12])
+    assert np.all(prepared[:12] == 255)
+
+
+def test_outer_margin_does_not_expand_circular_hole() -> None:
+    segmenter = essae_segmenter()
+    baseline = segmenter.segment(np.zeros((100, 100, 3), np.uint8))
+    segmenter.outer_inset_ratio = .08
+    result = segmenter.segment(np.zeros((100, 100, 3), np.uint8))
+    np.testing.assert_array_equal(result.source_mask[25:55, 25:55],
+                                  baseline.source_mask[25:55, 25:55])
+    assert result.source_mask.sum() < baseline.source_mask.sum()
+
+
+def test_outer_margin_excludes_frame_edge_when_platform_fills_frame() -> None:
+    segmenter = TestbedSegmenter.__new__(TestbedSegmenter)
+    segmenter.inset_px = 2
+    segmenter.outer_inset_ratio = .03
+    mask = segmenter._clean_mask(np.ones((100, 100), np.uint8))
+    assert not np.any(mask[:3])
+    assert not np.any(mask[:, -3:])
+    assert mask[3, 3] == 1

@@ -208,7 +208,7 @@ def build_jewellery_mask(image: np.ndarray, erase_mask: np.ndarray | None = None
     preferred_white = float(np.mean([item.mean() for item in corners])) > 180
     masks = [_threshold(image, preferred_white), _threshold(image, not preferred_white)]
     padded_erase: np.ndarray | None = None
-    if erase_mask is not None and np.any(erase_mask):
+    if erase_mask is not None:
         padded_erase = cv2.dilate(
             (erase_mask > 0).astype(np.uint8),
             np.ones((25, 25), np.uint8),

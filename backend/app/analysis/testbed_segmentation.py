@@ -34,6 +34,7 @@ class TestbedSegmenter:
         confidence_threshold: float = 0.50,
         mask_threshold: float = 0.50,
         inset_px: int = 2,
+        outer_inset_ratio: float = 0.0,
         providers: list[str] | None = None,
     ) -> None:
         self.model_path = Path(model_path)
@@ -42,6 +43,7 @@ class TestbedSegmenter:
         self.confidence_threshold = float(confidence_threshold)
         self.mask_threshold = float(mask_threshold)
         self.inset_px = max(0, int(inset_px))
+        self.outer_inset_ratio = max(0.0, float(outer_inset_ratio))
         self.session = ort.InferenceSession(
             str(self.model_path),
             providers=["CPUExecutionProvider"],
@@ -206,12 +208,20 @@ class TestbedSegmenter:
             cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)),
             iterations=1,
         )
-        if self.inset_px:
-            size = self.inset_px * 2 + 1
+        # The tray prediction includes its raised rim. Its width scales with
+        # the tray in the camera frame, rather than with a fixed pixel count.
+        # Keep this outer margin independent of the circular-hole expansion:
+        # widening the hole would unnecessarily erase nearby jewellery.
+        _, _, width, height = cv2.boundingRect(binary)
+        inset = max(self.inset_px, int(round(min(width, height) * getattr(self, "outer_inset_ratio", 0.0))))
+        if inset:
+            size = inset * 2 + 1
             binary = cv2.erode(
                 binary,
                 cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size)),
                 iterations=1,
+                borderType=cv2.BORDER_CONSTANT,
+                borderValue=0,
             )
         return binary
 

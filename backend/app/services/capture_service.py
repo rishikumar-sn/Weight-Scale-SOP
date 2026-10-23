@@ -45,7 +45,11 @@ class CaptureService:
             if self._testbed_segmenter is None or self._testbed_segmenter.model_path != path:
                 # Drop the previous ONNX session before loading the other scale.
                 self._testbed_segmenter = None
-                self._testbed_segmenter = TestbedSegmenter(path, inset_px=12 if model == "essae_jx500" else 2)
+                self._testbed_segmenter = TestbedSegmenter(
+                    path,
+                    inset_px=12 if model == "essae_jx500" else 2,
+                    outer_inset_ratio=0.035 if model == "essae_jx500" else 0.0,
+                )
             return self._testbed_segmenter
 
     def apply_scale(self, model: str) -> dict[str, Any]:
