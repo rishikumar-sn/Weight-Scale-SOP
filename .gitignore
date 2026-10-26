@@ -54,4 +54,9 @@ Thumbs.db
 /data/audits/
 /experiments/
 /WeightScaleSOP_UI_Redesign_Kit
+
+# Offline preparation downloads and isolated verification environments.
+/offline/build-logs/
+/offline-install-test*/
+/.offline-python/
 # Generated cache; keep foreign_object_prompts.json because the classifier loads it
