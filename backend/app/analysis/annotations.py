@@ -114,209 +114,171 @@ def display_crop(image: np.ndarray, region: dict | None = None, *, padding: floa
     return image[y1:y2, x1:x2].copy() if x2 > x1 and y2 > y1 else image.copy()
 
 
-def _icon(draw, kind, x, y, color="#243E58", size=80):
-    """Small vector-style icons, rasterized with the same renderer as the cards."""
-    def box(points):
-        return tuple(v * size / 80 + (x if i % 2 == 0 else y) for i, v in enumerate(points))
-    def line(points, width=5):
-        draw.line([tuple(box(p)) for p in points], fill=color, width=width, joint="curve")
-    def oval(bounds, fill=None, width=5):
-        draw.ellipse(box(bounds), fill=fill, outline=color, width=width)
-    if kind == "jewel":
-        draw.arc(box((5, -35, 75, 65)), 0, 180, fill=color, width=5)
-        oval((28, 52, 52, 76)); oval((16, 49, 29, 62), width=3); oval((51, 49, 64, 62), width=3)
-    elif kind == "weight":
-        line([(14, 13), (66, 13)]); line([(40, 13), (40, 29)])
-        line([(24, 29), (56, 29), (69, 70), (11, 70), (24, 29)])
-        draw.arc(box((26, 37, 54, 62)), 180, 360, fill=color, width=4)
-        line([(40, 52), (46, 41)], 4)
-    elif kind == "calendar":
-        draw.rounded_rectangle(box((12, 16, 68, 72)), radius=5, outline=color, width=5)
-        line([(12, 32), (68, 32)]); line([(26, 8), (26, 24)]); line([(54, 8), (54, 24)])
-        for dx in (24, 39, 54):
-            for dy in (44, 58):
-                draw.rectangle(box((dx - 3, dy - 3, dx + 3, dy + 3)), fill=color)
-    elif kind == "camera":
-        draw.rounded_rectangle(box((6, 23, 74, 69)), radius=7, outline=color, width=5)
-        line([(19, 23), (26, 13), (51, 13), (58, 23)])
-        oval((26, 32, 54, 60)); oval((61, 30, 64, 33), fill=color, width=1)
-    elif kind == "beads":
-        for dx, dy in ((40, 14), (16, 39), (64, 39), (40, 65)):
-            oval((dx - 10, dy - 10, dx + 10, dy + 10), width=5)
-    elif kind == "gem":
-        line([(5, 28), (23, 7), (57, 7), (75, 28), (40, 73), (5, 28)])
-        line([(5, 28), (75, 28)], 4)
-        line([(23, 7), (30, 28), (40, 73), (50, 28), (57, 7)], 3)
-    elif kind == "area":
-        draw.rounded_rectangle(box((10, 10, 70, 70)), radius=12, outline=color, width=5)
-        for a, b in [((21, 19), (33, 19)), ((47, 19), (59, 19)), ((21, 61), (33, 61)), ((47, 61), (59, 61)), ((19, 24), (19, 36)), ((61, 44), (61, 56))]:
-            line([a, b], 3)
-    elif kind in {"outer", "inner"}:
-        line([(7, 40), (73, 40)], 5)
-        line([(18, 29), (7, 40), (18, 51)], 5)
-        line([(62, 29), (73, 40), (62, 51)], 5)
-        if kind == "outer":
-            line([(40, 5), (40, 75)])
-            line([(29, 16), (40, 5), (51, 16)])
-            line([(29, 64), (40, 75), (51, 64)])
-        else:
-            draw.arc(box((8, 4, 72, 76)), 215, 325, fill=color, width=5)
-            draw.arc(box((8, 4, 72, 76)), 35, 145, fill=color, width=5)
-    elif kind == "dot":
-        oval((21, 21, 59, 59), fill=color, width=1)
-    else:
-        oval((15, 15, 65, 65), fill=color, width=1)
-        draw.text((x + size / 2, y + size / 2), "i", font=font(30, True), fill="white", anchor="mm")
-
-
-def _card_kind(caption):
-    caption = caption.upper()
-    for keyword, kind in [("JEWELLERY", "jewel"), ("WEIGHT", "weight"), ("DATE", "calendar"),
-                          ("TIME", "calendar"), ("CONTENT", "camera"), ("QUALITY", "camera"),
-                          ("DETECTED", "beads"), ("RESULT", "gem"), ("ASSESSMENT", "gem"),
-                          ("AREA", "area"), ("OUTER", "outer"), ("INNER", "inner")]:
-        if keyword in caption:
-            return kind
-    return "info"
+@lru_cache(maxsize=64)
+def review_font(size: int, bold: bool = False):
+    """Times New Roman on Windows; bundled metric-compatible serif elsewhere."""
+    name = "LiberationSerif-Bold.ttf" if bold else "LiberationSerif-Regular.ttf"
+    for path in (
+        Path("C:/Windows/Fonts/timesbd.ttf" if bold else "C:/Windows/Fonts/times.ttf"),
+        Path(__file__).resolve().parents[3] / "assets" / "fonts" / name,
+        Path("/usr/share/fonts/truetype/liberation2") / name,
+    ):
+        if path.is_file():
+            return ImageFont.truetype(str(path), size)
+    return font(size, bold)
 
 
 def add_side_panel(image: np.ndarray, title: str, fields: list[tuple[str, str]],
                    field_colors: dict[str, tuple[int, int, int]] | None = None,
                    *, presence_ok: bool | None = None, note: str | None = None,
-                   jewellery_items: list[tuple[int, str]] | None = None) -> np.ndarray:
-    """Reference-style 1536 x 1024 *display export*, independent of source size.
+                   jewellery_items: list[tuple[int, str]] | None = None,
+                   weights: dict | None = None) -> np.ndarray:
+    """Typeset evidence on a fixed 1536 x 1024 export, preserving photo zoom.
 
-    Accepts an already annotated rendering copy. Contain-fit retains all pixels
-    of the selected display crop. The model input and its coordinates never pass
-    through this layout. Additional rows extend only the exported canvas.
+    All layout fitting happens in the information panel. Source crops, detection
+    annotations and the contain-fit/enlargement limits are unchanged.
     """
     width, height, header, split = 1536, 1024, 144, 864
-    panel_x, right, top, gap = 890, 1508, 176, 18
-    text_x, text_right = panel_x + 126, right - 28
-    available = text_right - text_x
-    title_upper = title.upper()
-    stage = 2 if "BEAD" in title_upper else 3 if "STONE" in title_upper else 4 if "DIMENSION" in title_upper else 1
-    heading = {1: title_upper, 2: title_upper, 3: "STONE ANALYSIS", 4: "DIMENSION ANALYSIS"}[stage]
-    rows = list(fields)
-    # Notes are quiet footer text, never a result card. Dimensions need none.
-    notes = [str(value) for caption, value in rows if caption.upper() == "NOTE"]
-    rows = [(caption, value) for caption, value in rows if caption.upper() != "NOTE"]
+    left, right, top = 916, 1490, 184
+    available = right - left
+    paper, ink, muted, rule, accent = "#FFFDFA", "#171713", "#626568", "#DDD8D0", "#94632E"
+    upper = title.upper()
+    stage = 2 if "BEAD" in upper else 3 if "STONE" in upper else 4 if "DIMENSION" in upper else 1
+    heading = {2: "Bead detection", 3: "Stone analysis", 4: "Dimension analysis"}.get(stage, title.capitalize())
+    rows = [(k, "Unavailable" if v is None else str(v)) for k, v in fields if k.upper() not in {"NOTE", "DATE & TIME"}]
+    date = next((str(v) for k, v in fields if k.upper() == "DATE & TIME"), "")
+    notes = [str(v) for k, v in fields if k.upper() == "NOTE"]
     if note:
         notes.append(note)
     footer = " ".join(notes) if stage != 4 else ""
-    draw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
-    footer_lines = _wrap(draw, f"Note: {footer}", font(20), right - panel_x - 24) if footer else []
-    footer_height = len(footer_lines) * 27 + 24 if footer_lines else 0
-    total = None
-    if stage == 2:
-        total_value = next((v for k, v in fields if k in {"DETECTED", "BEADS DETECTED"}), None)
-        try:
-            total = max(0, int(total_value))
-        except (TypeError, ValueError):
-            pass
-    item_rows = [(index, _wrap(draw, label, font(34, True), right - panel_x - 132))
-                 for index, label in jewellery_items or []]
-    prepared = []
-    for caption, value in rows:
-        value = "Unavailable" if value is None else str(value)
-        category = caption.upper().replace(" BEADS", "")
-        progress = stage == 2 and category in {"TINY", "SMALL", "LARGE", "UNCLASSIFIED SIZE"}
-        kind = "dot" if progress or caption == "STONE MASK" else _card_kind(caption)
-        caption_text = "BEADS DETECTED" if caption == "DETECTED" else f"{category} BEADS" if category in {"TINY", "SMALL", "LARGE"} else caption
-        caption_lines = _wrap(draw, caption_text, font(30), available)
-        secondary = caption in {"DATE & TIME", "NOTE", "STONE MASK", "LEARNED REFERENCES"}
-        value_size = 32 if secondary or item_rows else 48
-        # Keep the risk phrase and familiar short types on a single line where possible.
-        if len(value) <= 26 and not secondary:
-            while value_size > 36 and draw.textlength(value, font=font(value_size, True)) > available:
-                value_size -= 1
-        value_lines = _wrap(draw, value, font(value_size, not secondary), available)
-        min_height = 48 + len(caption_lines) * 36 + 10 + len(value_lines) * (value_size + 10) + (32 if progress else 0)
-        if item_rows and caption.startswith("JEWELLERY TYPES"):
-            min_height = 28 + len(caption_lines) * 36 + 18 + sum(len(lines) * 42 + 12 for _, lines in item_rows) + 20
-        prepared.append((caption, caption_lines, value_lines, value_size, secondary, progress, kind, min_height, value))
-    natural_height = (height - top - 26 - footer_height - gap * max(0, len(prepared) - 1)) / max(1, len(prepared))
-    # Three large, spaced cards or four compact cards, matching the supplied screens.
-    heights = [max(row[7], 132 if item_rows else min(244, int(natural_height))) for row in prepared]
-    height = max(height, top + sum(heights) + gap * max(0, len(prepared) - 1) + 26 + footer_height)
-    canvas = Image.new("RGB", (width, height), "white")
+    canvas = Image.new("RGB", (width, height), paper)
     draw = ImageDraw.Draw(canvas)
-    for yy in range(header):
-        amount = yy / header
-        color = tuple(round(a * (1 - amount) + b * amount) for a, b in zip((29, 49, 68), (19, 35, 52)))
-        draw.line((0, yy, width, yy), fill=color)
-    draw.ellipse((50, 27, 144, 121), fill="#2485F6", outline="#65AEFF", width=2)
-    draw.text((97, 71), f"{stage}.", font=font(57), fill="white", anchor="mm")
-    badge = "Image OK" if presence_ok is True else "Image is not proper" if presence_ok is False else f"Total Beads: {total}" if total is not None else None
-    badge_width = int(draw.textlength(badge, font=font(28, True))) + 70 if badge else 0
-    title_size = 54
-    while title_size > 30 and draw.textlength(heading, font=font(title_size, True)) > width - 220 - badge_width:
-        title_size -= 1
-    draw.text((184, 70), heading, font=font(title_size, True), fill="white", anchor="lm")
+    draw.text((44, 42), heading, font=review_font(52, True), fill=ink, anchor="lt")
+    if jewellery_items:
+        draw.text((44, 108), f"{len(jewellery_items)} pieces on the tray", font=review_font(24), fill=muted, anchor="lt")
+    badge = "IMAGE OK" if presence_ok is True else "IMAGE IS NOT PROPER" if presence_ok is False else ""
     if badge:
-        bx = width - badge_width - 32
-        badge_color = "#0BA87A" if presence_ok is True else "#C63D4B" if presence_ok is False else "#29435E"
-        draw.rounded_rectangle((bx, 32, width - 32, 112), radius=24, fill=badge_color)
-        draw.text((bx + badge_width / 2, 70), badge, font=font(28, True), fill="white", anchor="mm")
-    draw.rounded_rectangle((1, header, width - 2, height - 2), radius=22, fill="#FFFFFF", outline="#DCE5ED", width=2)
-    draw.rectangle((split, header + 22, width - 4, height - 24), fill="#FBFCFE")
+        badge_ink = accent if presence_ok else "#A23931"
+        badge_width = draw.textlength(badge, font=review_font(21, True)) + 28
+        draw.rectangle((right - badge_width, 28, right, 66), outline=badge_ink, width=2)
+        draw.text((right - badge_width / 2, 47), badge, font=review_font(21, True), fill=badge_ink, anchor="mm")
+    if date:
+        draw.text((right, 100), date, font=review_font(25), fill=muted, anchor="rt")
+    draw.line((0, header, width, header), fill=rule)
+    # Keep exactly the existing display bounds, crop scaling and positioning.
     photo = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-    # Display resampling only: both enlargement and reduction preserve aspect ratio.
-    photo_height = min(height, 1024) - header - 24 if item_rows else height - header - 24
-    # Leave breathing room and limit enlargement of small camera crops.
+    photo_height = height - header - 24
     inset = .80 if stage in {2, 3, 4} else 1.
     factor = min(2., (split - 24) * inset / photo.width, photo_height * inset / photo.height)
     if factor != 1:
         photo = photo.resize((round(photo.width * factor), round(photo.height * factor)), Image.Resampling.LANCZOS)
     canvas.paste(photo, (12 + (split - 24 - photo.width) // 2, header + 12 + (photo_height - photo.height) // 2))
-    draw.line((split, header + 8, split, height - 8), fill="#E5EBF1", width=2)
+    draw.line((split, header, split, height), fill=rule)
+    footer_lines = _wrap(draw, footer, review_font(22), available) if footer else []
+    bottom = height - 32 - len(footer_lines) * 28 - (24 if footer_lines else 0)
+    weight_note_lines = []
+    weight_table_top = None
+    if weights is not None and stage == 3:
+        weight_note_lines = _wrap(draw, weights.get("note") or "", review_font(20), available)
+        weight_height = 224 + len(weight_note_lines) * 24
+        weight_table_top = bottom - weight_height
+        bottom = weight_table_top - 28
+    total = None
+    if stage == 2:
+        try:
+            total = max(0, int(next(v for k, v in rows if k in {"DETECTED", "BEADS DETECTED"})))
+        except (ValueError, StopIteration):
+            pass
+
+    # Measure before painting. Dense trays use tighter table rows, retaining all
+    # J references and wrapped labels rather than growing/shrinking the photo.
+    for scale in (1., .94, .88, .82, .76, .70, .64, .58, .52):
+        small = max(18, round(23 * scale))
+        normal = max(22, round(36 * scale))
+        leading, padding = round(10 * scale), round(26 * scale)
+        prepared = []
+        for caption, value in rows:
+            category = caption.upper().replace(" BEADS", "")
+            table = stage == 2 and category in {"TINY", "SMALL", "LARGE", "UNCLASSIFIED SIZE"}
+            items = jewellery_items if caption.startswith("JEWELLERY TYPES") else None
+            label = "BEADS DETECTED" if caption == "DETECTED" else caption
+            captions = _wrap(draw, label, review_font(small), available)
+            if items:
+                item_size = max(21, round(29 * scale))
+                content = [(i, _wrap(draw, text, review_font(item_size), available - 70)) for i, text in items]
+                content_height = sum(len(lines) * (item_size + 5) + round(10 * scale) for _, lines in content)
+                value_size = item_size
+            else:
+                metric = any(word in caption for word in ("WEIGHT", "AREA", "DIAMETER")) or caption in {"DETECTED", "BEADS DETECTED"}
+                secondary = caption in {"STONE MASK", "LEARNED REFERENCES", "SURFACE REFLECTION", "OTHER OBJECTS / LOCATION"}
+                value_size = max(22, round((68 if metric else 29 if secondary else 40) * scale))
+                content = _wrap(draw, value, review_font(value_size), available)
+                content_height = len(content) * (value_size + leading)
+            row_height = (max(small, normal) + padding * 2 if table else len(captions) * (small + 5) + leading + content_height + padding * 2)
+            prepared.append((caption, value, captions, content, value_size, row_height, items, table, category))
+        if sum(row[5] for row in prepared) <= bottom - top:
+            break
     y = top
-    for row, row_height in zip(prepared, heights):
-        caption, captions, values, value_size, secondary, progress, kind, _, raw_value = row
-        color = (field_colors or {}).get(caption, "#233F5B")
-        fill, ink = "#F0F4F8", "#14283E"
-        if caption in {"RESULT", "ASSESSMENT"} and "high" in raw_value.lower():
-            fill, ink, color = "#FFF0F3", "#D81D42", "#D81D42"
-        elif caption == "IMAGE CONTENT":
-            color = "#08A57F" if presence_ok is True else "#C63D4B" if presence_ok is False else "#617083"
-        draw.rounded_rectangle((panel_x, y, right, y + row_height), radius=24, fill=fill)
-        _icon(draw, kind, panel_x + 25, y + 28 if item_rows else y + 44, color, size=44 if item_rows and caption.startswith("JEWELLERY TYPES") else 60 if item_rows else 80)
-        ty = y + 28
-        for line in captions:
-            draw.text((text_x, ty), line, font=font(30), fill=ink if caption == "RESULT" else "#30485F", anchor="lt")
-            ty += 36
-        ty += 12
-        if item_rows and caption.startswith("JEWELLERY TYPES"):
-            for index, lines in item_rows:
-                draw.rounded_rectangle((panel_x + 26, ty, panel_x + 100, ty + 40), radius=10, fill="#233F5B")
-                draw.text((panel_x + 63, ty + 20), f"J{index}", font=font(24, True), fill="white", anchor="mm")
-                for line in lines:
-                    draw.text((panel_x + 112, ty), line, font=font(34, True), fill=ink, anchor="lt")
-                    ty += 42
-                ty += 12
-            y += row_height + gap
-            continue
-        for line in values:
-            draw.text((text_x, ty), line, font=font(value_size, not secondary), fill=ink, anchor="lt")
-            ty += value_size + 10
-        if progress:
-            try:
-                count = max(0, int(raw_value))
-                share = count / total if total and total > 0 else None
-            except (TypeError, ValueError):
-                share = None
-            if share is not None:
-                percent = f"{share * 100:.1f}%"
-                draw.text((text_right, ty - value_size - 10), percent, font=font(28), fill="#30485F", anchor="rt")
-            bar_y = y + row_height - 34
-            draw.rounded_rectangle((text_x, bar_y, text_right, bar_y + 17), radius=8, fill="#DDE6EE")
-            if share is not None and share > 0:
-                end = text_x + max(17, round((text_right - text_x) * min(1., share)))
-                draw.rounded_rectangle((text_x, bar_y, end, bar_y + 17), radius=8, fill=color)
-        y += row_height + gap
+    for caption, value, captions, content, value_size, row_height, items, table, category in prepared:
+        ty = y
+        if table:
+            label = f"{category.capitalize()} beads" if category != "UNCLASSIFIED SIZE" else "Unclassified size"
+            draw.text((left, ty), label, font=review_font(small + 2), fill=ink, anchor="lt")
+            draw.text((right - 105, ty), value, font=review_font(normal), fill=ink, anchor="rt")
+            if total is not None:
+                try:
+                    percent = max(0, int(value)) / total * 100 if total else 0
+                    draw.text((right, ty + 5), f"{percent:.1f}%", font=review_font(small), fill=muted, anchor="rt")
+                except ValueError:
+                    pass
+        else:
+            for line in captions:
+                draw.text((left, ty), line, font=review_font(small), fill=muted, anchor="lt")
+                ty += small + 5
+            ty += leading
+            if items:
+                for index, lines in content:
+                    draw.text((left, ty), f"J{index}", font=review_font(value_size), fill=accent, anchor="lt")
+                    for line in lines:
+                        draw.text((left + 70, ty), line, font=review_font(value_size), fill=ink, anchor="lt")
+                        ty += value_size + 5
+                    ty += round(10 * scale)
+                    draw.line((left, ty - 5, right, ty - 5), fill=rule)
+            else:
+                value_ink = "#A23931" if caption in {"RESULT", "ASSESSMENT"} and "high" in value.lower() else ink
+                for line in content:
+                    number, separator, unit = line.rpartition(" ")
+                    if separator and unit in {"g", "mm", "mm²", "mm2"}:
+                        draw.text((left, ty), number, font=review_font(value_size), fill=value_ink, anchor="lt")
+                        unit_x = left + draw.textlength(number, font=review_font(value_size)) + 14
+                        unit_size = max(18, round(value_size * .52))
+                        # Align the smaller unit with the number's baseline.
+                        baseline = ty + draw.textbbox((0, 0), number, font=review_font(value_size), anchor="lt")[3]
+                        draw.text((unit_x, baseline), unit, font=review_font(unit_size), fill=muted, anchor="lb")
+                    else:
+                        draw.text((left, ty), line, font=review_font(value_size), fill=value_ink, anchor="lt")
+                    ty += value_size + leading
+        y += row_height
+        if y < bottom - 8:
+            draw.line((left, y - padding, right, y - padding), fill=rule)
+    if weight_table_top is not None:
+        from ..domain.weights import weight_rows
+        table_y = weight_table_top
+        draw.line((left, table_y, right, table_y), fill=rule)
+        draw.text((left, table_y + 18), "JEWELLERY WEIGHTS (GRAMS)", font=review_font(22), fill=muted, anchor="lt")
+        table_y += 54
+        columns = (left, left + 220, left + 370)
+        for row_index, row in enumerate(weight_rows(weights)):
+            for column, text in zip(columns, row):
+                draw.text((column, table_y), text, font=review_font(21, row_index == 0), fill=muted if row_index == 0 else ink, anchor="lt")
+            table_y += 34
+            draw.line((left, table_y - 7, right, table_y - 7), fill=rule)
+        table_y += 12
+        for line in weight_note_lines:
+            draw.text((left, table_y), line, font=review_font(20), fill=muted, anchor="lt")
+            table_y += 24
     for index, line in enumerate(footer_lines):
-        draw.text((panel_x + 12, height - footer_height + index * 27), line,
-                  font=font(20), fill="#617083", anchor="lt")
+        draw.text((left, height - 32 - len(footer_lines) * 28 + index * 28), line, font=review_font(22), fill=muted, anchor="lt")
     return cv2.cvtColor(np.asarray(canvas), cv2.COLOR_RGB2BGR)
 
 
@@ -343,6 +305,25 @@ def render_capture_review(image: np.ndarray, state: dict, items: list[dict], *,
             box = (x, y, x + bbox["w"], y + bbox["h"])
             label_box(photo, box, f"J{index}", occupied=occupied)
             bounds.append(box)
+    anomaly_locations = []
+    for number, detection in enumerate((state.get("foreign_object_check") or {}).get("detections") or [], 1):
+        if str(detection.get("label", "")).casefold() in {"jewellery", "jewelry", "jewel"}:
+            continue
+        bbox = detection.get("bbox") or {}
+        if bbox.get("w", 0) <= 0 or bbox.get("h", 0) <= 0:
+            continue
+        # Anomaly boxes already use raw camera coordinates, unlike item crops.
+        x, y = bbox["x"], bbox["y"]
+        box = (x, y, x + bbox["w"], y + bbox["h"])
+        name = str(detection["label"]).replace("_", " ").capitalize()
+        label_box(photo, box, f"A{number}: {name}", color=(75, 61, 198), occupied=occupied)
+        bounds.append(box)
+        tray_x, tray_y = tray.get("x", 0), tray.get("y", 0)
+        relative_x = (x + bbox["w"] / 2 - tray_x) / max(1, tray.get("w", image.shape[1]))
+        relative_y = (y + bbox["h"] / 2 - tray_y) / max(1, tray.get("h", image.shape[0]))
+        horizontal = "left" if relative_x < 1 / 3 else "right" if relative_x > 2 / 3 else "centre"
+        vertical = "top" if relative_y < 1 / 3 else "bottom" if relative_y > 2 / 3 else "middle"
+        anomaly_locations.append(f"A{number}: {name} — {vertical} {horizontal}")
     bounds.extend(occupied)
     corners = (state.get("calibration") or {}).get("corners") or []
     if corners:
@@ -362,11 +343,17 @@ def render_capture_review(image: np.ndarray, state: dict, items: list[dict], *,
         date = "Unavailable"
     types = labels[0][1] if len(labels) == 1 else "\n".join(f"J{index}  {label}" for index, label in labels) or "Unavailable"
     content = "Jewellery present" if presence_ok is True else "Image is not proper" if presence_ok is False else "Presence not checked"
-    return add_side_panel(photo, "CAPTURE CONFIRMATION" if confirmed else "CAPTURE REVIEW", [
+    fields = [
         ("JEWELLERY TYPE" if len(labels) <= 1 else f"JEWELLERY TYPES / {len(labels)} ITEMS", types),
         ("TOTAL CAPTURED WEIGHT" if len(labels) > 1 else "CAPTURED WEIGHT", f"{float(weight):.2f} g" if weight is not None else "Unavailable"),
         ("DATE & TIME", date), ("IMAGE CONTENT", content),
-    ], presence_ok=presence_ok, jewellery_items=labels if len(labels) > 1 else None)
+    ]
+    if anomaly_locations:
+        fields.append(("OTHER OBJECTS / LOCATION", "\n".join(anomaly_locations)))
+    if rejected and state.get("rejection_reason"):
+        fields.append(("RECAPTURE", str(state["rejection_reason"])))
+    return add_side_panel(photo, "CAPTURE CONFIRMATION" if confirmed else "CAPTURE REVIEW", fields,
+                          presence_ok=presence_ok, jewellery_items=labels if len(labels) > 1 else None)
 
 
 def render_bead_evidence(image: np.ndarray, detections: list[dict], analysis: dict,
@@ -409,11 +396,11 @@ def identify_result_image(image: np.ndarray, reference: str | None) -> np.ndarra
     draw = ImageDraw.Draw(output)
     size = 26
     text = str(reference)
-    while size > 18 and draw.textlength(text, font=font(size)) > output.width - 220:
+    while size > 18 and draw.textlength(text, font=review_font(size)) > output.width - 100:
         size -= 1
-    while text and draw.textlength(text, font=font(size)) > output.width - 220:
+    while text and draw.textlength(text, font=review_font(size)) > output.width - 100:
         text = text[:-2].rstrip() + "…"
-    draw.text((184, 108), text, font=font(size), fill="#D1E3F3", anchor="lt")
+    draw.text((output.width - 46, 108), text, font=review_font(size), fill="#626568", anchor="rt")
     return cv2.cvtColor(np.asarray(output), cv2.COLOR_RGB2BGR)
 
 

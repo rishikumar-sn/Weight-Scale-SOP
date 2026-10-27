@@ -340,3 +340,19 @@ button:focus-visible, select:focus-visible, a:focus-visible { outline: 3px solid
 
 .confirmationContent .resultImage, .resultGallery .resultImage, .rejectedReview .resultImage { background: #fff; }
 .rejectedReview .resultImage { max-height: 560px; }
+
+/* Give immediate visual feedback while capture preparation and classification run. */
+.capturePendingView { width: min(100%, 850px); margin: 0 auto; }
+.captureLoadingStatus { display: flex; align-items: flex-start; gap: 16px; }
+.captureLoadingStatus .eyebrow { margin-bottom: 6px; }
+.captureLoadingStatus p { color: var(--muted); font-size: 13px; line-height: 1.6; margin: 10px 0 0; }
+.captureSpinner { width: 32px; height: 32px; flex: none; margin-top: 6px; border: 3px solid var(--gold-soft); border-top-color: var(--gold); border-radius: 50%; animation: reconnectSpin 1s linear infinite; }
+.captureLoadingTrack { height: 4px; margin: 22px 0; border-radius: 99px; overflow: hidden; background: var(--gold-soft); }
+.captureLoadingTrack span { display: block; width: 35%; height: 100%; border-radius: inherit; background: var(--gold); animation: captureLoadingSlide 1.8s ease-in-out infinite alternate; }
+.capturePendingView .resultFigure { width: min(100%, 640px); margin: 0 auto; }
+.capturePendingView .resultImage { max-height: min(55dvh, 560px); }
+.capturePreviewPlaceholder { min-height: 220px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 15px; background: #fbfaf7; color: var(--muted); }
+@keyframes captureLoadingSlide { from { transform: translateX(0); } to { transform: translateX(185%); } }
+@media (prefers-reduced-motion: reduce) {
+  .captureSpinner, .captureLoadingTrack span { animation: none; }
+}

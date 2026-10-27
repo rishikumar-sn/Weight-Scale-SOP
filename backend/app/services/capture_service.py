@@ -148,6 +148,19 @@ class CaptureService:
 
     def capture(self) -> dict[str, Any]:
         frame, camera_snapshot = self.camera.snapshot_frame()
+        settings = self.settings_store.get()
+        height, width = frame.shape[:2]
+        apriltag_roi = roi_to_pixels(settings["rois"].get("apriltag"), width, height)
+        tag = settings["apriltag"]
+        try:
+            detected = detect_apriltag(
+                frame, apriltag_roi, int(tag["id"]),
+                float(tag["width_mm"]), float(tag["height_mm"]),
+            )
+        except RuntimeError as exc:
+            raise RuntimeError("Remove the object on the marker and recapture.") from exc
+        calibration = {"available": True, **detected}
+        effective_apriltag_roi = apriltag_roi_from_detection(frame.shape, detected)
         scale_snapshot = self.scale.snapshot()
         if scale_snapshot.get("unit") not in (None, "g"):
             raise RuntimeError("ct capture is not allowed. Switch the scale to grams (g) and try again.")
@@ -166,32 +179,14 @@ class CaptureService:
         capture_id = f"{now.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
         session_dir = self.repository.session_dir(capture_id)
         source_dir = session_dir / "capture"
-        source_dir.mkdir(parents=True, exist_ok=True)
         with self._testbed_lock:
             settings = self.settings_store.get()
             segmenter = self._get_testbed_segmenter()
-            testbed = segmenter.segment(frame)
+            testbed = segmenter.segment(frame, apriltag=detected)
             testbed_model_path = segmenter.model_path
             del segmenter
-        height, width = frame.shape[:2]
-        apriltag_roi = roi_to_pixels(settings["rois"].get("apriltag"), width, height)
         processing = testbed.image
         processing_roi = testbed.processing_roi
-        effective_apriltag_roi = apriltag_roi
-        calibration: dict[str, Any]
-        try:
-            tag = settings["apriltag"]
-            detected = detect_apriltag(
-                frame,
-                apriltag_roi,
-                int(tag["id"]),
-                float(tag["width_mm"]),
-                float(tag["height_mm"]),
-            )
-            calibration = {"available": True, **detected}
-            effective_apriltag_roi = apriltag_roi_from_detection(frame.shape, detected)
-        except Exception as exc:  # noqa: BLE001
-            calibration = {"available": False, "message": str(exc)}
         working_tag_roi = translate_roi_to_crop(
             effective_apriltag_roi, processing_roi, processing.shape[1], processing.shape[0]
         )
@@ -213,6 +208,7 @@ class CaptureService:
         prepared[testbed.mask == 0] = 255
         prepared[jewellery_mask == 0] = 255
         evidence = self._evidence_image(frame, weight, now)
+        source_dir.mkdir(parents=True, exist_ok=True)
         paths = {
             "original": self._save(source_dir / "original.png", frame),
             "evidence": self._save(source_dir / "evidence.jpg", evidence),
@@ -243,6 +239,7 @@ class CaptureService:
             "testbed": {
                 "model": str(testbed_model_path),
                 "confidence": testbed.confidence,
+                "hole_validation": testbed.hole_validation,
                 "masking": "polygon_with_white_square_padding",
             },
             "calibration": calibration,

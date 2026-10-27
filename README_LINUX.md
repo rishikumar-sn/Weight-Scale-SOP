@@ -6,7 +6,7 @@ and V4L2 for the USB camera. ARM/Raspberry Pi needs separately verified wheels
 and models. Linux hardware operation must be verified on the target machine.
 
 This parent project now contains the Linux developments and Windows support.
-Use `bash startbackend.sh` on Linux and `scripts/start_backend.ps1` on Windows.
+Use `bash app.sh start` on Linux and `scripts/start_backend.ps1` on Windows.
 Hardware settings persist separately in `data/settings/app.json` under
 `hardware_profiles.linux` and `hardware_profiles.windows`. See the
 [hardware settings guide](README.md#windows-and-linux-hardware-settings) before
@@ -68,7 +68,7 @@ explicitly use CPU, even if GPU hardware is present.
 
 Setup runs `scripts/verify_cpu.py` to reject GPU builds and NVIDIA dependencies.
 For an existing environment with CUDA packages, stop the backend, move `.venv`
-aside (for example `mv .venv .venv.previous`), and rerun `bash startup.sh` to
+aside (for example `mv .venv .venv.previous`), and rerun `bash app.sh install` to
 create a clean CPU environment. Installing requirements does not remove leftover
 GPU dependencies from an old environment. Verify manually with:
 
@@ -177,31 +177,30 @@ target camera. Close other camera/serial applications before launch.
 From the project directory:
 
 ```bash
-chmod +x startup.sh startbackend.sh
-./startup.sh
+# Install once, or repair/reverify the installation:
+bash app.sh install
+
+# Start the installed application every day:
+bash app.sh start
 ```
 
-Alternatively use `bash startup.sh`. It creates `.venv`, installs the Python
-requirements, checks dependency metadata, runs `npm ci`, builds the frontend,
-and starts `run.py`. Installation/build failures stop the script. It does not
-install system packages or change device permissions; complete steps 1–3 first.
-Choose another supported Python with `PYTHON_BIN=python3.11 bash startup.sh`.
-The chosen interpreter is used when creating the environment; an existing Linux
-environment is reused.
+`app.sh install` creates `.venv`, installs Python requirements, checks dependency
+metadata, builds the frontend, and exits without starting the server. For an
+offline bundle it uses the bundled dependencies and frontend and runs the
+installation model/OCR checks. Installation failures stop the script. Complete
+the system-package prerequisites above first.
 
-To install/build without launching:
+Choose another supported Python for an online installation with
+`PYTHON_BIN=python3.11 bash app.sh install`. An existing Linux environment is reused.
 
-```bash
-./startup.sh --setup-only
-```
+`app.sh start` starts the backend and opens the UI. It does not install
+packages, rebuild the frontend, or run installation smoke tests. The launcher
+automatically selects the offline bundle when present.
 
-For everyday operation, no reinstall or rebuild is needed:
+`app.sh` is the only application launcher. Running `bash app.sh` without an
+argument also starts the backend. The previous launcher scripts have been removed.
 
-```bash
-./startbackend.sh
-```
-
-Both scripts locate the project relative to themselves, so they also work when
+The script locates the project relative to itself, so it also works when
 called by absolute path from another directory. Run as the deployment user,
 without `sudo`. Keep the project and model cache directories writable because
 the app saves captures, settings, classifier caches and learned corrections.
@@ -218,7 +217,7 @@ workers with shared USB devices. The launcher's lock prevents duplicate launches
 through this script for the same checkout; it cannot guard manual `python run.py`
 launches or another checkout.
 
-After frontend changes, rerun `startup.sh` or build with
+After frontend changes in an online installation, rerun `app.sh install` or build with
 `npm run build --prefix frontend` before restarting the backend. Environment
 options such as `JEWELLERY_CLASSIFIER_MODEL` can be exported before either
 launcher. `JEWELLERY_ONNX_PROVIDERS` no longer overrides CPU inference.

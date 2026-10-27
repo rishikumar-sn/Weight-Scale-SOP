@@ -1,4 +1,6 @@
 import logging
+import os
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -9,13 +11,26 @@ from .identifier import packet_identifier
 
 class OCRReader:
     def __init__(self):
+        model_root = os.environ.get("WEIGHT_OFFLINE_OCR_MODEL_ROOT")
+        model_options = {"lang": "en"} if not model_root else {}
+        if model_root:
+            for kind, name in (("detection", "PP-OCRv6_medium_det"), ("recognition", "PP-OCRv6_medium_rec")):
+                path = Path(model_root) / name
+                for filename in ("inference.json", "inference.pdiparams", "inference.yml"):
+                    asset = path / filename
+                    if not asset.is_file() or asset.stat().st_size == 0:
+                        raise FileNotFoundError(f"Bundled OCR model missing or empty: {asset}")
+                model_options[f"text_{kind}_model_name"] = name
+                model_options[f"text_{kind}_model_dir"] = str(path)
         from paddleocr import PaddleOCR
         # PaddleOCR 3.x uses predict(); 2.x uses ocr(). Keep one engine per worker.
         try:
-            self.engine = PaddleOCR(lang="en", device="cpu", use_textline_orientation=False,
+            self.engine = PaddleOCR(device="cpu", use_textline_orientation=False,
                                     use_doc_orientation_classify=False, use_doc_unwarping=False,
-                                    enable_mkldnn=False)
+                                    enable_mkldnn=False, **model_options)
         except TypeError:
+            if model_root:
+                raise  # Offline deployment requires the bundled PaddleOCR 3.x wheels.
             self.engine = PaddleOCR(lang="en", use_gpu=False, use_angle_cls=False, show_log=False)
 
     def _items(self, image):

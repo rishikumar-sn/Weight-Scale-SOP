@@ -23,7 +23,9 @@ import numpy as np
 FASTSAM_STONE_REFINEMENT_ENABLED = True
 STONE_CANDIDATE_MIN_AREA = 6
 STONE_CANDIDATE_MAX_COUNT = 48
-STONE_OVERFLOW_MAX_COUNT = 24
+# Keep neural refinement bounded separately; cheap, verified colored faces may
+# exceed the ordinary proposal budget on dense necklaces.
+STONE_OVERFLOW_MAX_COUNT = 128
 STONE_FASTSAM_MAX_CANDIDATES = 8
 STONE_CROP_PADDING_RATIO = 2.0
 STONE_CROP_MIN_SIZE = 64
@@ -333,11 +335,36 @@ def _non_gold_color_components(
     count, labels, stats, _ = cv2.connectedComponentsWithStats(residual, 8)
     components: list[dict[str, Any]] = []
     maximum_area = max(40, int(jewel_area * 0.16))
+    non_metal_color = (
+        (saturation >= 65) & (value >= 30)
+        & ((hsv[:, :, 0] < 6) | (hsv[:, :, 0] > 45)) & (gold_mask == 0)
+    )
     for label in range(1, count):
         area = int(stats[label, cv2.CC_STAT_AREA])
-        if area < STONE_CANDIDATE_MIN_AREA or area > maximum_area:
+        if area < STONE_CANDIDATE_MIN_AREA:
             continue
         mask = np.where(labels == label, 255, 0).astype(np.uint8)
+        if area > maximum_area:
+            # Touching beads can connect a whole strand. Split its coherent
+            # chromatic faces before applying the per-stone area guard.
+            parts = _watershed_split(image_bgr, mask, 80, max_parts=128)
+            for part in parts:
+                part_area = int(cv2.countNonZero(part))
+                if not 80 <= part_area <= maximum_area:
+                    continue
+                valid = part > 0
+                metrics = _shape_metrics(part)
+                if (float(np.mean(non_metal_color[valid])) < 0.80
+                        or metrics["solidity"] < 0.55
+                        or metrics["aspect_ratio"] > 3.5
+                        or metrics["compactness"] < 0.18):
+                    continue
+                components.append({
+                    "mask": part, "confidence": 0.86,
+                    "median_saturation": round(float(np.median(saturation[valid])), 1),
+                    "median_value": round(float(np.median(value[valid])), 1),
+                })
+            continue
         shape = _shape_metrics(mask)
         if shape["aspect_ratio"] > 5.0 or shape["solidity"] < 0.35:
             continue
@@ -660,15 +687,37 @@ def generate_stone_candidates(
     overflow_pool = candidates[limit:] if recover_overflow else []
     overflow_lab = None
     overflow_hsv = None
+    overflow_chromatic = None
     for candidate in overflow_pool:
         if candidate["seed_area_px"] < 80:
             continue
         sources = set(candidate["source_methods"])
-        if not sources.intersection({"non_gold_hsv_residual", "non_gold_neutral_residual"}):
+        if not sources.intersection({"non_gold_hsv_residual", "non_gold_neutral_residual", "hsv_lab"}):
             continue
         if overflow_lab is None:
             overflow_lab = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2LAB)
             overflow_hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
+            hue, saturation, value = cv2.split(overflow_hsv)
+            overflow_chromatic = (
+                (saturation >= 65) & (value >= 30)
+                & ((hue < 6) | (hue > 45)) & (gold_mask == 0)
+            )
+        # A whole strand may form one residual component and exceed its area
+        # limit. Independently segmented HSV/LAB faces still provide evidence;
+        # do not require the rejected strand's residual tag to recover them.
+        # Their rescue requires a substantial, compact, strongly chromatic
+        # non-metal face, so warm gold and neutral reflections remain excluded.
+        if not sources.intersection({"non_gold_hsv_residual", "non_gold_neutral_residual"}):
+            valid = candidate["seed_mask"] > 0
+            shape_metrics = _shape_metrics(candidate["seed_mask"])
+            if not (
+                float(np.mean(overflow_chromatic[valid])) >= 0.80
+                and shape_metrics["aspect_ratio"] <= 3.5
+                and shape_metrics["solidity"] >= 0.55
+                and shape_metrics["compactness"] >= 0.18
+            ):
+                continue
+            candidate["source_methods"] = sorted(sources | {"non_gold_chromatic_face"})
         classification = classify_stone_instance_color(
             image_bgr, candidate["seed_mask"], gold_mask=gold_mask,
             lab_image=overflow_lab, hsv_image=overflow_hsv,
@@ -1064,6 +1113,7 @@ def _watershed_split(
     image_bgr: np.ndarray,
     mask: np.ndarray,
     min_area: int,
+    max_parts: int = 8,
 ) -> list[np.ndarray]:
     area = int(cv2.countNonZero(mask))
     if area < min_area * 3:
@@ -1075,7 +1125,7 @@ def _watershed_split(
     peaks = np.where(distance >= peak * 0.56, 255, 0).astype(np.uint8)
     peaks = cv2.morphologyEx(peaks, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
     count, markers = cv2.connectedComponents(peaks)
-    if count <= 2 or count > 9:
+    if count <= 2 or count > max_parts + 1:
         return [mask]
     watershed_markers = markers.astype(np.int32) + 1
     watershed_markers[mask == 0] = 1

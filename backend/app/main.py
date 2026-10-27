@@ -98,6 +98,7 @@ def _public_capture(state: dict[str, Any]) -> dict[str, Any]:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    repository.start_run()
     try:
         analysis.preload_models()
         try:
@@ -154,10 +155,22 @@ def shutdown_backend(request: Request, background_tasks: BackgroundTasks):
     return {"ok": True, "message": "Backend is shutting down safely."}
 
 
+def _mark_local_ui(connection: Request | WebSocket):
+    seen = getattr(app.state, "browser_ui_seen", None)
+    if seen is not None and connection.client and connection.client.host in {"127.0.0.1", "::1"}:
+        seen.set()
+
+
 @app.get("/api/live")
+def live_status(request: Request):
+    _mark_local_ui(request)
+    return live_state()
+
+
 def live_state():
-    latest = repository.latest()
+    latest = repository.latest_in_run()
     return {
+        "run_id": repository.run_id,
         "camera": camera.status(),
         "scale": scale.snapshot(),
         "latest": _public_capture(latest) if latest else None,
@@ -177,14 +190,10 @@ def reconnect_camera():
 @app.websocket("/ws/live")
 async def live_socket(websocket: WebSocket):
     await websocket.accept()
+    _mark_local_ui(websocket)
     try:
         while True:
-            latest = repository.latest()
-            await websocket.send_json({
-                "camera": camera.status(),
-                "scale": scale.snapshot(),
-                "latest": _public_capture(latest) if latest else None,
-            })
+            await websocket.send_json(live_state())
             await asyncio.sleep(0.4)
     except (WebSocketDisconnect, RuntimeError):
         return

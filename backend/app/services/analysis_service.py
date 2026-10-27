@@ -17,6 +17,8 @@ from PIL import Image
 
 from ..analysis.annotations import (identify_result_image, jewel_reference,
                                     render_bead_evidence, render_capture_review)
+from ..analysis.bangle_orientation import detect_bangle_orientation
+from ..analysis.bangle_placement import check_bangle_placement, PLACEMENT_MESSAGE
 from ..analysis.beads import analyze_bead_detections, onnx_image_size, prepare_onnx_input
 from ..analysis.vision import separate_jewellery_items
 from ..analysis.foreign_objects import ForeignObjectDetector
@@ -40,7 +42,7 @@ from Classification.jewelry_classifier import (  # noqa: E402
     JewelryZeroShotClassifier, NOT_GOLD_LABEL, PredictionResult,
 )
 from Classification.siglip384_classifier import Siglip384Classifier  # noqa: E402
-from Dimension.bangle_detector import detect_bangle  # noqa: E402
+from Dimension.bangle_detector import detect_bangle, gold_bangle_mask  # noqa: E402
 import StoneDetection.jewel_gem_hsv_report as stone_detection  # noqa: E402
 
 
@@ -179,6 +181,7 @@ def _adaptive_bead_nms(
     boxes: list[list[int]],
     scores: list[float],
     image_shape: tuple[int, ...],
+    model_sources: list[str] | None = None,
 ) -> list[int]:
     """Greedy NMS with an IoU threshold derived from each bead's image-relative size."""
     selected: list[int] = []
@@ -188,7 +191,11 @@ def _adaptive_bead_nms(
         duplicate = False
         for selected_index in selected:
             selected_iou = _bead_nms_iou_threshold(boxes[selected_index], image_shape)
-            if _box_iou(candidate_box, boxes[selected_index]) > max(candidate_iou, selected_iou):
+            iou_threshold = max(candidate_iou, selected_iou)
+            if model_sources and model_sources[candidate_index] != model_sources[selected_index]:
+                # Cross-model duplicates need stricter suppression even for large beads.
+                iou_threshold = BEAD_NMS_SMALL_IOU
+            if _box_iou(candidate_box, boxes[selected_index]) > iou_threshold:
                 duplicate = True
                 break
         if not duplicate:
@@ -213,6 +220,7 @@ class OnnxBeadDetector:
         self,
         model_path: Path,
         providers: list[str] | None = None,
+        additional_model_paths: list[Path] | None = None,
     ) -> None:
         providers = ["CPUExecutionProvider"]
         self.session = ort.InferenceSession(str(model_path), providers=providers)
@@ -220,21 +228,19 @@ class OnnxBeadDetector:
         self.input_size = onnx_image_size(self.session)
         self.model_name = model_path.name
         self.model_metadata = self.session.get_modelmeta().custom_metadata_map or {}
+        self.additional_detectors = [
+            OnnxBeadDetector(path, providers=providers)
+            for path in (additional_model_paths or [])
+        ]
 
-    def run(
-        self,
-        image: np.ndarray,
-        threshold: float = BEAD_DETECTION_SCORE_THRESHOLD,
-        detection_region: dict[str, int] | None = None,
-        measurement_scale: dict[str, Any] | None = None,
-        detection_mask: np.ndarray | None = None,
-    ) -> tuple[dict[str, Any], np.ndarray, np.ndarray]:
+    def _predict(
+        self, image: np.ndarray, threshold: float,
+    ) -> tuple[list[list[int]], list[float]]:
+        """Decode this model's boxes into the original raw image coordinates."""
         height, width = image.shape[:2]
-        if detection_mask is not None and detection_mask.shape != (height, width):
-            raise ValueError("Bead detection mask must match the full-frame image dimensions")
         tensor, scale, left, top = prepare_onnx_input(image, self.input_size)
         output = np.asarray(self.session.run(None, {self.input_name: tensor})[0])
-        predictions = np.squeeze(output)
+        predictions = output[0] if output.ndim == 3 and output.shape[0] == 1 else output
         if predictions.ndim == 2 and predictions.shape[0] == 5:
             predictions = predictions.T
         boxes: list[list[int]] = []
@@ -252,18 +258,52 @@ class OnnxBeadDetector:
                 if x2 > x1 and y2 > y1:
                     boxes.append([x1, y1, x2, y2])
                     scores.append(float(score))
-        selected = _adaptive_bead_nms(boxes, scores, image.shape)
+        return boxes, scores
+
+    def run(
+        self,
+        image: np.ndarray,
+        threshold: float = BEAD_DETECTION_SCORE_THRESHOLD,
+        detection_region: dict[str, int] | None = None,
+        measurement_scale: dict[str, Any] | None = None,
+        detection_mask: np.ndarray | None = None,
+    ) -> tuple[dict[str, Any], np.ndarray, np.ndarray]:
+        height, width = image.shape[:2]
+        if detection_mask is not None and detection_mask.shape != (height, width):
+            raise ValueError("Bead detection mask must match the full-frame image dimensions")
+        boxes: list[list[int]] = []
+        scores: list[float] = []
+        model_sources: list[str] = []
+        models = [self, *self.additional_detectors]
+        model_results: list[dict[str, Any]] = []
+        for detector in models:
+            # Every model receives the same untouched full-frame image, with
+            # its own metadata-derived letterbox size (960 or 640).
+            model_boxes, model_scores = detector._predict(image, threshold)
+            accepted = 0
+            for box, score in zip(model_boxes, model_scores):
+                if not _box_center_in_region(box, detection_region):
+                    continue
+                if detection_mask is not None and detection_mask[
+                    (box[1] + box[3]) // 2, (box[0] + box[2]) // 2,
+                ] <= 0:
+                    continue
+                boxes.append(box)
+                scores.append(score)
+                model_sources.append(detector.model_name)
+                accepted += 1
+            model_results.append({
+                "model": detector.model_name,
+                "model_input_size": {
+                    "height": detector.input_size[0], "width": detector.input_size[1],
+                },
+                "region_candidate_count": accepted,
+            })
+        selected = _adaptive_bead_nms(boxes, scores, image.shape, model_sources)
         candidates = [
-            {"bbox": boxes[index], "score": round(scores[index], 4)}
+            {"bbox": boxes[index], "score": round(scores[index], 4),
+             "model": model_sources[index]}
             for index in selected
-            if _box_center_in_region(boxes[index], detection_region)
-            and (
-                detection_mask is None
-                or detection_mask[
-                    (boxes[index][1] + boxes[index][3]) // 2,
-                    (boxes[index][0] + boxes[index][2]) // 2,
-                ] > 0
-            )
         ]
         detections = [dict(candidate) for candidate in candidates]
         bead_analysis = analyze_bead_detections(image, detections, measurement_scale)
@@ -284,12 +324,13 @@ class OnnxBeadDetector:
             "onnx_detections": candidates,
             "detections": detections,
             "count": len(detections),
-            "decision_source": "onnx_detector",
+            "decision_source": "onnx_ensemble" if len(models) > 1 else "onnx_detector",
             "decision_reason": (
-                f"The detector found {len(detections)} candidate"
+                f"The {len(models)} detector(s) found {len(detections)} merged candidate"
                 f"{'s' if len(detections) != 1 else ''} at confidence {threshold:.2f}."
             ),
             **bead_analysis,
+            "models": model_results,
             "model": self.model_name,
             "score_threshold": float(threshold),
             "model_input_size": {
@@ -303,6 +344,7 @@ class OnnxBeadDetector:
                 if key in self.model_metadata
             },
             "nms_iou": {
+                "cross_model": BEAD_NMS_SMALL_IOU,
                 "small": BEAD_NMS_SMALL_IOU,
                 "medium": BEAD_NMS_MEDIUM_IOU,
                 "large": BEAD_NMS_LARGE_IOU,
@@ -334,9 +376,10 @@ class AnalysisService:
         self._executor.shutdown(wait=True, cancel_futures=True)
 
     def preload_models(self) -> None:
-        """Preload core models; the foreign-object model loads after the first gate passes."""
+        """Load all analysis gates before accepting captures."""
         self._get_classifier()
         self._get_beads()
+        self._get_foreign_objects()
 
     def _get_classifier(self) -> JewelryZeroShotClassifier:
         with self._model_lock:
@@ -365,6 +408,9 @@ class AnalysisService:
                 self._beads = OnnxBeadDetector(
                     PROJECT_ROOT / "models" / "detection" / "bead_finder.onnx",
                     providers=self._onnx_providers(),
+                    additional_model_paths=[
+                        PROJECT_ROOT / "models" / "detection" / "beadfinder_old.onnx",
+                    ],
                 )
             return self._beads
 
@@ -374,13 +420,64 @@ class AnalysisService:
                 self._foreign_objects = ForeignObjectDetector(FOREIGN_OBJECT_MODEL_PATH)
             return self._foreign_objects
 
-    def _check_foreign_objects(self, state: dict[str, Any]) -> dict[str, Any]:
+    def _check_foreign_objects(self, state: dict[str, Any], separated: list[dict] | None = None) -> dict[str, Any]:
         paths = state["paths"]
         raw = cv2.imread(paths.get("original", ""))
         testbed_mask = cv2.imread(paths.get("testbed_source_mask", ""), cv2.IMREAD_GRAYSCALE)
         if raw is None or testbed_mask is None:
             raise RuntimeError("The raw capture or full-frame testbed mask is unavailable; recapture.")
-        return self._get_foreign_objects().detect(raw, testbed_mask)
+        if separated is None:
+            return self._get_foreign_objects().detect(raw, testbed_mask)
+        origin = state["rois"]["processing"]
+        components = [
+            {"bbox": {**item["bbox"], "x": item["bbox"]["x"] + origin["x"],
+                      "y": item["bbox"]["y"] + origin["y"]}, "mask": item["mask"]}
+            for item in separated
+        ]
+        return self._get_foreign_objects().detect(raw, testbed_mask, components=components)
+
+    def _check_bangle_placement(self, item: dict[str, Any], label: str) -> dict[str, Any]:
+        if label_key(label) != "bangle":
+            item.pop("placement_check", None)
+            return {"passed": True, "method": "not_a_bangle"}
+        path = (item.get("paths") or {}).get("mask")
+        mask = cv2.imread(path, cv2.IMREAD_GRAYSCALE) if path else None
+        evidence = check_bangle_placement(mask)
+        item["placement_check"] = evidence
+        return evidence
+
+    def _reject_bangle_placement(self, state: dict[str, Any], items: list[dict[str, Any]]) -> None:
+        affected = [{"item_index": int(item["index"]), "bbox": item["bbox"],
+                     **item["placement_check"]} for item in items
+                    if not (item.get("placement_check") or {}).get("passed", True)]
+        state["placement_check"] = {"passed": False, "method": "bangle_opening_geometry",
+                                    "affected_items": affected}
+        state["rejection_kind"] = "placement"
+        state["rejection_reason"] = PLACEMENT_MESSAGE
+        state["route"] = {}
+        state["result"] = {}
+        # A merged component is not a reliable jewel count. Keep its evidence
+        # separately, rather than presenting it as a confirmed single jewel.
+        state["classification"] = {"count": 0, "items": [], "labels": [],
+                                   "confirmed": False, "predicted_label": "",
+                                   "confirmed_label": None}
+        state["status"] = "rejected"
+        state["updated_at"] = self._now()
+        self.repository.save(state)
+        self._save_rejected_review(state)
+
+    def _route_for_item(self, item: dict[str, Any], label: str) -> dict[str, Any]:
+        if label_key(label) != "bangle":
+            item.pop("bangle_orientation", None)
+            return route_for_label(label)
+        paths = item.get("paths") or {}
+        mask = cv2.imread(paths["mask"], cv2.IMREAD_GRAYSCALE) if paths.get("mask") else None
+        image = cv2.imread(paths["working"]) if paths.get("working") else None
+        evidence = detect_bangle_orientation(
+            mask, gold_mask=gold_bangle_mask(image) if image is not None else None
+        )
+        item["bangle_orientation"] = evidence
+        return route_for_label(label, bangle_orientation=evidence["orientation"])
 
     def classify(self, capture_id: str) -> dict[str, Any]:
         state = self.repository.get(capture_id)
@@ -400,6 +497,33 @@ class AnalysisService:
             min_area_ratio=float(settings.get("min_area_ratio", 0.00045)),
             padding_px=int(settings.get("padding_px", 18)),
         )
+        check = self._check_foreign_objects(state, separated)
+        state["foreign_object_check"] = check
+        foreign_indices = set(check.get("foreign_component_indices", []))
+        state["other_objects"] = [
+            {"source_component_index": index, "bbox": item["bbox"], "kind": "foreign_object"}
+            for index, item in enumerate(separated, 1) if index in foreign_indices
+        ]
+        separated = [item for index, item in enumerate(separated, 1) if index not in foreign_indices]
+        placement = check.get("placement_check") or {"passed": True}
+        if not placement["passed"] or (not check["passed"] and not separated):
+            state["rejection_kind"] = "foreign_objects" if not check["passed"] else "placement"
+            labels = ", ".join(sorted({d["label"].replace("_", " ") for d in check["detections"]}))
+            state["rejection_reason"] = (
+                f"Other objects detected ({labels}). Remove them and recapture."
+                if not check["passed"] else
+                "Jewels are kept together. Keep them well separated and recapture the image."
+            )
+            # No reliable separated jewellery remains to classify. Do not
+            # send contaminants or merged pieces to SigLIP as individual jewels.
+            state["classification"] = {"count": 0, "items": [], "labels": [],
+                                       "confirmed": False, "predicted_label": "",
+                                       "confirmed_label": None}
+            state["status"] = "rejected"
+            state["updated_at"] = self._now()
+            self.repository.save(state)
+            self._save_rejected_review(state)
+            return state
         if not separated:
             raise RuntimeError(
                 "No separate jewellery item was found. Keep every jewel fully inside the jewellery area, "
@@ -484,39 +608,44 @@ class AnalysisService:
                 ],
             })
 
+        for item in classified_items:
+            if label_key(item["predicted_label"]) == "bangle":
+                self._route_for_item(item, item["predicted_label"])
+
+        non_jewellery = [item for item in classified_items
+                         if route_for_label(item["predicted_label"])["key"] == "no_analysis"]
+        state["other_objects"].extend(
+            {"bbox": item["bbox"], "kind": "non_jewellery",
+             "reason": item["gold_verification_reason"]} for item in non_jewellery
+        )
+        classified_items = [item for item in classified_items if item not in non_jewellery]
+        for index, item in enumerate(classified_items, 1):
+            item["index"] = index
         predicted_labels = [str(item["predicted_label"]) for item in classified_items]
-        if all(route_for_label(label)["key"] == "no_analysis" for label in predicted_labels):
-            raise RuntimeError(
-                "No gold jewellery was detected; the capture contains only background or a "
-                "non-jewellery object. Remove foreign objects, place gold jewellery on the "
-                "testbed, and recapture."
-            )
         state["classification"] = {
             # These aggregate fields keep old clients and reports readable.
             "model_id": getattr(classifier, "text_model_id", ""),
             "predicted_label": ", ".join(predicted_labels),
             "confirmed_label": None,
             "confirmed": False,
-            "confidence": float(np.mean([item["confidence"] for item in classified_items])),
+            "confidence": float(np.mean([item["confidence"] for item in classified_items])) if classified_items else 0.0,
             "count": len(classified_items),
             "labels": predicted_labels,
             "items": classified_items,
         }
-        # Any existing Not Gold decision remains authoritative. Run the second
-        # gate once, on the unmodified full frame, only when all items passed.
-        if all(route_for_label(label)["key"] != "no_analysis" for label in predicted_labels):
-            check = self._check_foreign_objects(state)
-            state["foreign_object_check"] = check
-            if not check["passed"]:
-                labels = ", ".join(sorted({d["label"].replace("_", " ") for d in check["detections"]}))
-                state["rejection_reason"] = (
-                    f"This image has other objects with jewellery ({labels}). "
-                    "Remove the other objects from the testbed and recapture."
-                )
-                state["status"] = "rejected"
-                state["updated_at"] = self._now()
-                self.repository.save(state)
-                return state
+        if not check["passed"] or non_jewellery:
+            state["rejection_kind"] = "foreign_objects" if not check["passed"] else "non_jewellery"
+            state["status"] = "rejected"
+            state["rejection_reason"] = "Remove the other objects from the testbed and recapture."
+            state["updated_at"] = self._now()
+            self.repository.save(state)
+            self._save_rejected_review(state)
+            return state
+        for item in classified_items:
+            self._check_bangle_placement(item, item["predicted_label"])
+        if any(not (item.get("placement_check") or {}).get("passed", True) for item in classified_items):
+            self._reject_bangle_placement(state, classified_items)
+            return state
         annotated_path = self._save_classified_evidence(state, classified_items, confirmed=False)
         state["paths"]["evidence"] = annotated_path
         state["paths"]["classified"] = annotated_path
@@ -576,7 +705,7 @@ class AnalysisService:
                 )
             should_learn = bool((confirmation or {}).get("learn", learn))
             pending_confirmations.append(
-                (item, confirmed_label, should_learn, route_for_label(confirmed_label))
+                (item, confirmed_label, should_learn, self._route_for_item(item, confirmed_label))
             )
 
         rejected_predictions = [
@@ -601,6 +730,13 @@ class AnalysisService:
                 f"Jewel(s) {jewels} were classified as Not Gold Jewelry. "
                 "Detailed analysis is blocked; remove the object and recapture."
             )
+
+        for item, confirmed_label, _learn, _route in pending_confirmations:
+            self._check_bangle_placement(item, confirmed_label)
+        if any(not (item.get("placement_check") or {}).get("passed", True)
+               for item, _label, _learn, _route in pending_confirmations):
+            self._reject_bangle_placement(state, classified_items)
+            raise RuntimeError(PLACEMENT_MESSAGE)
 
         confirmed_labels: list[str] = []
         routes: list[dict[str, Any]] = []
@@ -671,7 +807,7 @@ class AnalysisService:
             photo = cv2.imread(str(original))
             if photo is None:
                 return
-            rendered = render_capture_review(photo, state, [], rejected=True)
+            rendered = render_capture_review(photo, state, (state.get("classification") or {}).get("items") or [], rejected=True)
             path = self.repository.session_dir(state["id"]) / "capture" / "classified_evidence.jpg"
             path.parent.mkdir(parents=True, exist_ok=True)
             if cv2.imwrite(str(path), rendered):
@@ -748,6 +884,13 @@ class AnalysisService:
         label = str((item or {}).get("confirmed_label") or state["classification"]["confirmed_label"])
         if label_key(label) in {"finger ring", "ring"}:
             return {"applicable": False, "status": "skipped", "reason": "Analysis is disabled for finger rings."}
+        if label_key(label) == "bangle":
+            target = item if item is not None else {"paths": paths}
+            self._route_for_item(target, label)
+            orientation = target["bangle_orientation"]
+            if not orientation["measurement_allowed"]:
+                return {"applicable": False, "status": "skipped",
+                        "reason": orientation["reason"], "bangle_orientation": orientation}
         suffix = f"item_{int(item['index']):02d}" if item else "dimensions"
 
         mm_per_pixel = _apriltag_scale_mm_per_pixel(calibration)
@@ -910,10 +1053,25 @@ class AnalysisService:
         area = measurements.get("total_area_mm2")
         stones_found = str(risk.get("level") or "NONE") != "NONE"
         area_text = f"{float(area):.2f} mm\u00b2" if stones_found and area is not None else "Not reported"
+        report["reflection_notice"] = None
+        gallery_weights = None
+        if estimate_weight:
+            # Reuse the overall result/UI calculation, including caps and ranges.
+            gallery_weights = weight_summary({
+                "weight_g": state.get("weight_g"),
+                "result": {"count": 1, "items": [{
+                    "stones": {"found": stones_found, **stone_weight_fields(measurements, stones_found)},
+                    "beads": ((state.get("result") or {}).get("beads") or {}),
+                }]},
+            })
+        stone_metric = ("STONE SURFACE AREA", area_text)
+        if estimate_weight:
+            stone_g = gallery_weights.get("stone_g")
+            stone_metric = ("STONE WEIGHT (ESTIMATED)", f"{stone_g:.2f} g" if stone_g is not None else "Unavailable")
         gallery = stone_detection.build_result_gallery(analysis["jewel_views"], summary_fields=[
             ("RESULT", str(risk.get("status") or "No stones")),
-            ("STONE SURFACE AREA", area_text),
-        ], item_reference=jewel_reference(item))
+            stone_metric,
+        ], item_reference=jewel_reference(item), weights=gallery_weights)
         cv2.imwrite(str(gallery_path), gallery)
         report_path = self._save_json(
             output_dir / "result.json",
@@ -922,6 +1080,8 @@ class AnalysisService:
         result = {
             # Risk NONE includes calibrated sub-5 mm² regions suppressed as
             # likely reflections/texture rather than reported as real stones.
+            "reflection_flagged": False,
+            "reflection_notice": None,
             "found": stones_found,
             "risk_level": str(risk.get("level") or "NONE"),
             "risk_status": str(risk.get("status") or "No stones"),
@@ -942,8 +1102,17 @@ class AnalysisService:
             classified_items = (state.get("classification") or {}).get("items") or []
             # Also enforce the current policy for queued captures with old routes.
             for item in classified_items:
-                if label_key(item.get("confirmed_label")) in {"finger ring", "ring"}:
-                    item["route"] = route_for_label(item["confirmed_label"])
+                if label_key(item.get("confirmed_label")) in {"finger ring", "ring", "bangle"}:
+                    item["route"] = self._route_for_item(item, item["confirmed_label"])
+            for item in classified_items:
+                self._check_bangle_placement(item, item.get("confirmed_label") or "")
+            if any(not (item.get("placement_check") or {}).get("passed", True) for item in classified_items):
+                self._reject_bangle_placement(state, classified_items)
+                state["job"] = {"status": "failed", "stage": "Placement check",
+                                "message": PLACEMENT_MESSAGE, "percent": 0,
+                                "seconds_remaining": 0, "error": PLACEMENT_MESSAGE}
+                self.repository.save(state)
+                return
             result_items: list[dict[str, Any]] = []
             completed_steps = 0
             total_steps = max(1, sum(
@@ -957,6 +1126,7 @@ class AnalysisService:
                     "label": item["confirmed_label"],
                     "bbox": item["bbox"],
                     "route": dict(item["route"]),
+                    "bangle_orientation": item.get("bangle_orientation"),
                     "errors": [],
                 }
                 route = item_result["route"]
@@ -1000,7 +1170,12 @@ class AnalysisService:
             # Persist the current routing policy for reports and reopened results.
             for item, item_result in zip((state.get("classification") or {}).get("items") or [], result_items):
                 item["route"] = item_result["route"]
+                if item_result.get("bangle_orientation") is not None:
+                    item["bangle_orientation"] = item_result["bangle_orientation"]
             state.setdefault("route", {}).update({
+                "key": "multi_item" if len(result_items) > 1 else (
+                    result_items[0]["route"]["key"] if result_items else "no_analysis"
+                ),
                 "dimension": any(item["route"].get("dimension") for item in result_items),
                 "beads": any(item["route"].get("beads") for item in result_items),
                 "stones": any(item["route"].get("stones") for item in result_items),

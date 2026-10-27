@@ -144,7 +144,7 @@ BACKGROUND_HOLE_MAX_AREA_FRACTION = 0.20
 BACKGROUND_HOLE_MIN_RING_SUPPORT = 0.70
 BACKGROUND_HOLE_MAX_LIGHTNESS_STD = 11.0
 BACKGROUND_HOLE_MAX_CHROMA_STD = 6.0
-REFLECTION_COVERAGE_FLAG_PERCENT = 1.50
+REFLECTION_COVERAGE_FLAG_PERCENT = 5.0
 REFLECTION_LOCAL_DENSITY_FLAG_PERCENT = 18.0
 MIN_GOLD_PIXELS_FOR_STONE_DETECTION = 120
 MIN_GOLD_RATIO_FOR_STONE_DETECTION = 0.012
@@ -1493,97 +1493,36 @@ def patch_based_inpaint(
     return cleaned, inpainted_regions, applied_mask
 
 
+def surface_reflection_metrics(image_bgr: np.ndarray, jewel_mask: np.ndarray) -> dict:
+    """Notice-only highlights on original pixels, independent of glare removal.
+
+    Bright, low-saturation pixels must stand out from nearby jewellery or be
+    very bright. Mask-normalized local means exclude the tray/background.
+    The shared area/density gate then rejects isolated sparkle/noise.
+    """
+    hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
+    support = (jewel_mask > 0).astype(np.float32)
+    value = hsv[:, :, 2].astype(np.float32)
+    local_support = cv2.boxFilter(support, -1, (21, 21), normalize=False)
+    local_sum = cv2.boxFilter(value * support, -1, (21, 21), normalize=False)
+    local_mean = local_sum / np.maximum(local_support, 1.0)
+    highlights = ((support > 0) & (value >= 170) & (hsv[:, :, 1] <= 85)
+                  & ((value - local_mean >= 12) | (value >= 220)))
+    metrics = reflection_metrics(highlights.astype(np.uint8) * 255, jewel_mask)
+    metrics["basis"] = "original_jewel_brightness_saturation_local_contrast"
+    return metrics
+
+
 def reflection_metrics(glare_mask: np.ndarray, jewel_mask: np.ndarray) -> dict:
-    if (
-        _STONE_AREA_CALC_AVAILABLE
-        and hasattr(_stone_area_calc, "calculate_reflection_risk")
-    ):
-        try:
-            return _stone_area_calc.calculate_reflection_risk(
-                glare_mask,
-                jewel_mask,
-                coverage_risk_percent=REFLECTION_COVERAGE_FLAG_PERCENT,
-                local_density_risk_percent=REFLECTION_LOCAL_DENSITY_FLAG_PERCENT,
-            )
-        except Exception:
-            pass
-
-    jewel_px = max(1, int(cv2.countNonZero(jewel_mask)))
-    glare_px = int(cv2.countNonZero(glare_mask))
-    if glare_px <= 0:
-        return {
-            "coverage_percent": 0.0,
-            "local_density_percent": 0.0,
-            "region_count": 0,
-            "largest_region_px": 0,
-            "largest_region_percent": 0.0,
-            "flagged": False,
-            "risk_status": "NORMAL",
-            "possible_transparent_stones": False,
-            "level": "normal",
-            "message": "No dense reflection signature detected.",
-        }
-
-    binary_glare = (glare_mask > 0).astype(np.float32)
-    binary_jewel = (jewel_mask > 0).astype(np.float32)
-    height, width = glare_mask.shape[:2]
-    window = max(9, min(41, int(round(min(height, width) * 0.12))))
-    if window % 2 == 0:
-        window += 1
-    local_glare = cv2.boxFilter(binary_glare, -1, (window, window), normalize=False)
-    local_jewel = cv2.boxFilter(binary_jewel, -1, (window, window), normalize=False)
-    local_density = np.divide(
-        local_glare,
-        np.maximum(local_jewel, 1.0),
-        out=np.zeros_like(local_glare),
-        where=local_jewel > 0,
-    )
-    local_density_percent = float(local_density.max() * 100.0)
-
-    count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(
-        (glare_mask > 0).astype(np.uint8),
-        connectivity=8,
-    )
-    component_areas = [
-        int(stats[index, cv2.CC_STAT_AREA])
-        for index in range(1, count)
-        if int(stats[index, cv2.CC_STAT_AREA]) >= 3
-    ]
-    coverage_percent = glare_px / float(jewel_px) * 100.0
-    flagged = bool(
-        coverage_percent >= REFLECTION_COVERAGE_FLAG_PERCENT
-        or (
-            coverage_percent >= 0.55
-            and local_density_percent >= REFLECTION_LOCAL_DENSITY_FLAG_PERCENT
-        )
-    )
-    if coverage_percent >= 3.0 or local_density_percent >= 32.0:
-        level = "high"
-    elif flagged:
-        level = "elevated"
+    if _STONE_AREA_CALC_AVAILABLE:
+        calculator = _stone_area_calc
     else:
-        level = "normal"
-    message = (
-        "Dense reflection detected; possible additional transparent/colorless gemstones may be present. "
-        "Treat this jewel as RISK."
-        if flagged
-        else "Reflection is present but not dense enough to classify the jewel as RISK."
+        from StoneDetection import stone_area_calculator as calculator
+    return calculator.calculate_reflection_risk(
+        glare_mask, jewel_mask,
+        coverage_risk_percent=REFLECTION_COVERAGE_FLAG_PERCENT,
+        local_density_risk_percent=REFLECTION_LOCAL_DENSITY_FLAG_PERCENT,
     )
-    return {
-        "coverage_percent": round(coverage_percent, 2),
-        "local_density_percent": round(local_density_percent, 2),
-        "region_count": len(component_areas),
-        "largest_region_px": max(component_areas, default=0),
-        "largest_region_percent": round(
-            max(component_areas, default=0) / float(jewel_px) * 100.0,
-            2,
-        ),
-        "flagged": flagged,
-        "risk_status": "RISK" if flagged else "NORMAL",
-        "possible_transparent_stones": flagged,
-        "level": level,
-        "message": message,
-    }
 
 
 def remove_specular_glare(
@@ -4579,8 +4518,6 @@ def gallery_summary_text(
         if detected_colors
         else "No gemstone-colored regions"
     )
-    if reflection and reflection.get("flagged"):
-        return f"RISK | {color_text} | Transparent stones possible"
     return color_text
 
 
@@ -4603,7 +4540,7 @@ def gallery_learned_text(learned_representations: list[dict]) -> str:
 
 
 def build_result_gallery(jewel_views: list[dict], summary_fields: list[tuple[str, str]] | None = None,
-                         *, item_reference: str | None = None) -> np.ndarray:
+                         *, item_reference: str | None = None, weights: dict | None = None) -> np.ndarray:
     import sys
     project_root = str(Path(__file__).resolve().parents[1])
     if project_root not in sys.path:
@@ -4613,8 +4550,9 @@ def build_result_gallery(jewel_views: list[dict], summary_fields: list[tuple[str
     if not jewel_views:
         empty = add_side_panel(np.full((820, 820, 3), 255, dtype=np.uint8), "STONE ANALYSIS", [
             ("RESULT", "No jewellery candidates found"),
-            ("STONE SURFACE AREA", "Unavailable"),
-        ], note="A jewellery region is required to display stone analysis.")
+            ("STONE WEIGHT (ESTIMATED)" if weights is not None else "STONE SURFACE AREA",
+             f"{weights['stone_g']:.2f} g" if weights is not None and weights.get("stone_g") is not None else "Unavailable"),
+        ], note="A jewellery region is required to display stone analysis.", weights=weights)
         return identify_result_image(empty, item_reference)
 
     tiles, margin = [], 16
@@ -4630,13 +4568,13 @@ def build_result_gallery(jewel_views: list[dict], summary_fields: list[tuple[str
                 source = display_crop(source, dict(x=x, y=y, w=w, h=h))
         fields = list(summary_fields) if summary_fields else [("RESULT", gallery_summary_text(
             view["detected_colors"], view.get("reflection"), view.get("stone_status")))]
-        if not any(caption == "STONE SURFACE AREA" for caption, _ in fields):
+        if not any(caption in {"STONE SURFACE AREA", "STONE WEIGHT (ESTIMATED)"} for caption, _ in fields):
             fields.append(("STONE SURFACE AREA", "Unavailable"))
         learned = gallery_learned_text(view.get("learned_representations") or [])
         if learned:
             fields.append(("LEARNED REFERENCES", learned))
         note = "Detected stones are marked as green regions." if view.get("detected_colors") else None
-        tile = add_side_panel(source, "STONE ANALYSIS", fields, note=note)
+        tile = add_side_panel(source, "STONE ANALYSIS", fields, note=note, weights=weights)
         reference = item_reference or f"J{view['jewel_id']}"
         if item_reference and len(jewel_views) > 1:
             reference += f" / Region {view['jewel_id']}"
@@ -4684,12 +4622,6 @@ def build_report_text(report: dict) -> str:
         f"Image: {report['source_image']}",
         f"Jewels found: {report['jewel_count']}",
         (
-            "Overall status: RISK - dense reflection indicates possible "
-            "additional transparent/colorless gemstones."
-            if report.get("reflection_flagged")
-            else "Overall reflection status: NORMAL"
-        ),
-        (
             "Ignored ROI(s): "
             + ", ".join(str(tuple(region)) for region in report.get("ignored_regions", []))
         )
@@ -4715,14 +4647,6 @@ def build_report_text(report: dict) -> str:
         glare_regions = int(jewel.get("glare_region_count", 0))
         if glare_px > 0:
             lines.append(f"  Glare inpainted: {glare_px} px across {glare_regions} region(s).")
-        reflection = jewel.get("reflection") or {}
-        if reflection.get("flagged"):
-            lines.append(
-                "  RISK JEWEL: Dense reflection indicates possible additional transparent/colorless gemstones. "
-                f"{reflection.get('level', 'elevated')} | "
-                f"coverage={float(reflection.get('coverage_percent', 0.0)):.2f}% | "
-                f"local density={float(reflection.get('local_density_percent', 0.0)):.2f}%"
-            )
         lines.append(
             f"  Stone coverage: {float(jewel.get('stone_percentage', 0.0)):.2f}% "
             f"({int(jewel.get('stone_area_px', 0))}/{int(jewel.get('jewel_area_px', 0))} px)"
@@ -4894,6 +4818,7 @@ def analyze_jewel_candidate(
         threshold=glare_threshold,
         patch_size=glare_patch_size,
     )
+    glare_stats["reflection"] = surface_reflection_metrics(display_bgr, zoomed_mask)
     jewel_area = original_area
     regions = detect_regions_in_roi(
         glare_processed_bgr,
@@ -5628,17 +5553,11 @@ def analyze_image_bgr(
         int((jewel.get("mask_cleanup") or {}).get("background_hole_count", 0))
         for jewel in report["jewels"]
     )
-    report["reflection_flagged"] = any(
-        bool((jewel.get("reflection") or {}).get("flagged"))
-        for jewel in report["jewels"]
-    )
-    report["reflection_risk"] = bool(report["reflection_flagged"])
-    report["risk_jewel"] = bool(report["reflection_flagged"])
-    report["risk_reasons"] = (
-        ["dense reflection indicates possible additional transparent/colorless gemstones"]
-        if report["reflection_flagged"]
-        else []
-    )
+    # Legacy fields remain neutral: highlights alone are not stone evidence.
+    report["reflection_flagged"] = False
+    report["reflection_risk"] = False
+    report["risk_jewel"] = False
+    report["risk_reasons"] = []
     measurement_results = [
         jewel.get("stone_measurements") or {}
         for jewel in report["jewels"]

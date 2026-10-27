@@ -66,11 +66,10 @@ STONE_SHAPE_DEPTH_PROFILES: dict[str, tuple[float, float, float, float]] = {
     "irregular": (0.18, 0.38, 0.65, 0.42),
 }
 
-# Reflection-risk thresholds. A jewel is flagged when reflections cover a
-# meaningful share of the jewel, or when a smaller but sufficiently large
-# local hotspot is extremely dense (common with transparent/colorless stones).
-REFLECTION_COVERAGE_RISK_PERCENT: float = 1.50
-REFLECTION_MIXED_COVERAGE_MIN_PERCENT: float = 0.55
+# Legacy thresholds retained for imports and call-signature compatibility.
+# Highlight diagnostics no longer classify jewels or infer gemstone risk.
+REFLECTION_COVERAGE_RISK_PERCENT: float = 5.0
+REFLECTION_MIXED_COVERAGE_MIN_PERCENT: float = 2.0
 REFLECTION_LOCAL_DENSITY_RISK_PERCENT: float = 18.0
 REFLECTION_LOCAL_HOTSPOT_RISK_PERCENT: float = 32.0
 REFLECTION_MIN_HOTSPOT_PIXELS: int = 12
@@ -870,11 +869,11 @@ def calculate_reflection_risk(
     local_hotspot_risk_percent: float = REFLECTION_LOCAL_HOTSPOT_RISK_PERCENT,
 ) -> dict[str, Any]:
     """
-    Measure dense specular reflection inside a jewelry mask.
+    Measure highlight coverage inside a jewelry mask without inferring risk.
 
-    Dense reflection is not proof of a gemstone. It is treated as a risk
-    indicator because transparent/colorless stones often produce concentrated
-    highlights that color-based stone detection can miss.
+    The legacy name and threshold arguments remain for caller compatibility.
+    Brightness and density cannot distinguish polished metal from gemstones,
+    so these measurements never flag a jewel or suggest transparent stones.
     """
     glare_bin = to_binary_mask(glare_mask)
     jewel_bin = to_binary_mask(jewel_mask)
@@ -919,7 +918,9 @@ def calculate_reflection_risk(
         out=np.zeros_like(local_glare),
         where=local_jewel > 0,
     )
-    local_density_percent = float(local_density.max() * 100.0)
+    # Ignore windows with too little jewellery support (e.g. a single edge pixel).
+    supported = (local_jewel >= max(12, window * window * 0.10)) & (jewel_bin > 0)
+    local_density_percent = float(local_density[supported].max() * 100.0) if np.any(supported) else 0.0
 
     count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(
         (glare_bin > 0).astype(np.uint8),
@@ -934,51 +935,19 @@ def calculate_reflection_risk(
     coverage_percent = glare_px / float(jewel_px) * 100.0
     largest_region_percent = largest_region_px / float(jewel_px) * 100.0
 
-    min_hotspot_px = max(
-        REFLECTION_MIN_HOTSPOT_PIXELS,
-        int(round(jewel_px * 0.0003)),
-    )
-    min_connected_hotspot_px = max(6, int(round(jewel_px * 0.0001)))
-    substantial_hotspot = bool(
-        glare_px >= min_hotspot_px
-        and largest_region_px >= min_connected_hotspot_px
-    )
-
-    coverage_trigger = coverage_percent >= float(coverage_risk_percent)
-    mixed_trigger = bool(
-        coverage_percent >= REFLECTION_MIXED_COVERAGE_MIN_PERCENT
-        and local_density_percent >= float(local_density_risk_percent)
-    )
-    local_hotspot_trigger = bool(
-        substantial_hotspot
-        and local_density_percent >= float(local_hotspot_risk_percent)
-    )
-    flagged = bool(coverage_trigger or mixed_trigger or local_hotspot_trigger)
-
-    if coverage_percent >= 3.0 or local_hotspot_trigger:
-        level = "high"
-    elif flagged:
-        level = "elevated"
-    else:
-        level = "normal"
-
-    message = (
-        "Dense reflection detected; possible additional transparent/colorless gemstones "
-        "may be present. Treat this jewel as RISK."
-        if flagged
-        else "Reflection is present but not dense enough to classify the jewel as RISK."
-    )
+    # Highlight coverage cannot distinguish polished metal from gemstones.
+    # Retain diagnostic measurements for report compatibility, without alerts.
     return {
         "coverage_percent": round(coverage_percent, 2),
         "local_density_percent": round(local_density_percent, 2),
         "region_count": len(component_areas),
         "largest_region_px": largest_region_px,
         "largest_region_percent": round(largest_region_percent, 2),
-        "flagged": flagged,
-        "risk_status": "RISK" if flagged else "NORMAL",
-        "possible_transparent_stones": flagged,
-        "level": level,
-        "message": message,
+        "flagged": False,
+        "risk_status": "NORMAL",
+        "possible_transparent_stones": False,
+        "level": "normal",
+        "message": "Highlight measurements are diagnostic only.",
     }
 
 
@@ -1331,12 +1300,12 @@ def _run_tests() -> None:
     check("T7 success=False on empty mask", r7["success"] is False)
     check("T7 no exception", True)  # reaching here means no exception raised
 
-    # Test 8: Dense local reflection hotspot marks the jewel as RISK
+    # Test 8: Dense highlights remain diagnostic and never imply stone risk
     j8 = np.ones((100, 100), dtype=np.uint8) * 255
     glare8 = np.zeros_like(j8)
-    glare8[46:54, 46:54] = 255
+    glare8[44:56, 44:56] = 255
     r8 = calculate_reflection_risk(glare8, j8)
-    check("T8 dense reflection hotspot => RISK", r8["risk_status"] == "RISK",
+    check("T8 dense highlights => no alert", r8["risk_status"] == "NORMAL" and not r8["flagged"],
           str(r8))
 
     # Test 9: A few isolated reflection pixels remain NORMAL

@@ -128,7 +128,7 @@ and discarded-frame count through `/api/health` and `/api/live`.
 
 ### Windows and Linux hardware settings
 
-Run `scripts/start_backend.ps1` on Windows and `bash startbackend.sh` on Linux.
+Run `scripts/start_backend.ps1` on Windows and `bash app.sh start` on Linux.
 The backend selects the hardware profile using the operating system. Settings
 are saved atomically in `data/settings/app.json`, under
 `hardware_profiles.windows` and `hardware_profiles.linux`; each holds its own
@@ -272,14 +272,23 @@ python run.py
 ## Linux setup
 
 Follow [README_LINUX.md](README_LINUX.md) for system packages, model transfers,
-and camera/scale permissions. Then install, build, and launch with:
+and camera/scale permissions. Then use this single Linux launcher:
 
 ```bash
-bash startup.sh
+# Install once (or repair/reverify):
+bash app.sh install
+
+# Start the installed application every day:
+bash app.sh start
 ```
 
-Subsequent launches use `bash startbackend.sh`. The backend serves the built UI
-and API together on port 8000.
+`app.sh install` installs and verifies dependencies, then exits. `app.sh start`
+starts the backend and UI without package installation, builds, or installation
+OCR/model tests. The launcher selects the offline bundle automatically when present.
+The backend serves the built UI and API together on port 8000.
+
+`app.sh` is the only application launcher. Running `bash app.sh` without an
+argument also starts the backend. The previous launcher scripts have been removed.
 
 The Linux camera backend uses V4L2. The scale service automatically searches
 serial devices, including CH340 adapters. The edge PC must continue to own the USB

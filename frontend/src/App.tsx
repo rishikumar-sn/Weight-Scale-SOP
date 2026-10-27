@@ -86,6 +86,8 @@ export default function App() {
   const [labels, setLabels] = useState<string[]>([]);
   const [active, setActive] = useState<CaptureState | null>(null);
   const [busy, setBusy] = useState(false);
+  const [capturePending, setCapturePending] = useState(false);
+  const [capturePreview, setCapturePreview] = useState<string | null>(null);
   const [shuttingDown, setShuttingDown] = useState(false);
   const [message, setMessage] = useState("Place the jewellery and check the weight.");
   const [error, setError] = useState("");
@@ -120,6 +122,7 @@ export default function App() {
   const videoRetryRef = useRef<number | null>(null);
   const cameraWasConnectedRef = useRef(false);
   const markerRefreshAttemptedRef = useRef(false);
+  const backendRunRef = useRef<string | null>(null);
 
   useEffect(() => {
     const timer = window.setInterval(() => setCurrentTime(new Date()), 1000);
@@ -214,7 +217,24 @@ export default function App() {
 
     const applyLiveState = (payload: any) => {
       if (disposed) return;
+      const restarted = backendRunRef.current !== null && backendRunRef.current !== payload.run_id;
+      backendRunRef.current = payload.run_id;
       setLive(payload);
+      if (restarted) {
+        setActive(null);
+        setCapturePending(false);
+        setCapturePreview(null);
+        setItemCorrections({});
+        setTareCaptures({});
+        setCaptureTab("jewellery");
+        setTareMode("pledge");
+        setBusy(false);
+        setSetupOpen(false);
+        setError("");
+        setMessage("Place the jewellery and check the weight.");
+        setVideoSrc(`/api/video?restart=${Date.now()}`);
+        return;
+      }
       setActive((current) => {
         if (current && payload.latest?.id === current.id) return payload.latest;
         if (!current && payload.latest && ["processing", "awaiting_confirmation", "rejected"].includes(payload.latest.status)) {
@@ -435,14 +455,39 @@ export default function App() {
     }
   }
 
-  async function capture() {
+  function showCapturePreview() {
+    // Freeze the displayed camera frame immediately, before either API call finishes.
+    // The server's saved original replaces this preview once capture preparation returns.
+    let preview: string | null = null;
+    const image = cameraImageRef.current;
+    if (image?.naturalWidth && image.naturalHeight) {
+      try {
+        const snapshot = document.createElement("canvas");
+        snapshot.width = image.naturalWidth;
+        snapshot.height = image.naturalHeight;
+        const context = snapshot.getContext("2d");
+        if (context) {
+          context.drawImage(image, 0, 0);
+          preview = snapshot.toDataURL("image/jpeg", 0.9);
+        }
+      } catch {
+        // A preview failure must never prevent the actual capture.
+      }
+    }
+    setCapturePreview(preview);
+    setCapturePending(true);
+  }
+
+  async function capture(reusePreview = false) {
     if (!checkCaptureUnit()) return;
+    if (!reusePreview) showCapturePreview();
     setBusy(true);
     setError("");
     setMessage("Capturing jewellery and weight...");
     try {
       const captured = await requestJson("/api/captures", { method: "POST" });
       setActive(captured);
+      if (captured.media?.original) setCapturePreview(captured.media.original);
       setMessage("Checking the item type...");
       const classified = await requestJson(`/api/captures/${captured.id}/item-type`, { method: "POST" });
       setActive(classified);
@@ -459,6 +504,8 @@ export default function App() {
       setError(reason.message);
       setMessage("Please recapture after placing gold jewellery on the testbed and removing foreign objects.");
     } finally {
+      setCapturePending(false);
+      setCapturePreview(null);
       setBusy(false);
     }
   }
@@ -496,6 +543,7 @@ export default function App() {
 
   async function recapture() {
     if (!checkCaptureUnit()) return;
+    showCapturePreview();
     setBusy(true);
     setError("");
     try {
@@ -506,11 +554,13 @@ export default function App() {
           body: JSON.stringify(classificationPayload()),
         });
       }
-      await capture();
+      await capture(true);
     } catch (reason: any) {
       setError(reason.message);
       setMessage("Corrections could not be saved. Please retry recapture.");
     } finally {
+      setCapturePending(false);
+      setCapturePreview(null);
       setBusy(false);
     }
   }
@@ -535,12 +585,14 @@ export default function App() {
 
   function startNew() {
     setActive(null);
+    setCapturePreview(null);
     setItemCorrections({});
     setError("");
     setMessage("Place the next jewellery item and check the weight.");
   }
 
   const stage = useMemo(() => {
+    if (capturePending) return "preparing";
     if (!active) return "capture";
     if (active.status === "rejected") return "rejected";
     if (active.status === "awaiting_confirmation") return "confirm";
@@ -548,7 +600,7 @@ export default function App() {
     if (active.status === "complete") return "results";
     if (active.status === "failed") return "failed";
     return "capture";
-  }, [active]);
+  }, [active, capturePending]);
 
   const weight = live.scale?.connected ? (live.scale?.value ?? live.scale?.weight_g) : undefined;
   const weightUnit = live.scale?.unit || "g";
@@ -739,7 +791,7 @@ export default function App() {
               aria-selected={captureTab === "tare"}
               className={captureTab === "tare" ? "selected" : ""}
               onClick={() => setCaptureTab("tare")}
-              disabled={["confirm", "processing"].includes(stage)}
+              disabled={busy || ["confirm", "processing", "preparing"].includes(stage)}
             >Tare weight</button>
           </div>
 
@@ -754,19 +806,38 @@ export default function App() {
                   <strong>{typeof weight === "number" ? `${weight.toFixed(weightPrecision)} ${weightUnit}` : "Waiting..."}</strong>
                   <time dateTime={currentTime.toISOString()}>{liveDate} · {liveTime}</time>
                 </div>
-                <button className="primary captureButton" onClick={capture} disabled={busy || !cameraReady || !live.scale?.connected || !rois.apriltag}>
+                <button className="primary captureButton" onClick={() => capture()} disabled={busy || !cameraReady || !live.scale?.connected || !rois.apriltag}>
                   {busy ? "Please wait..." : "Capture jewellery"}
                 </button>
                 {!rois.apriltag && <p className="hint">Keep the AprilTag visible so its area can be detected automatically.</p>}
               </div>
             )}
 
+            {captureTab === "jewellery" && stage === "preparing" && (
+              <div className="capturePendingView" aria-busy="true">
+                <div className="captureLoadingStatus" role="status">
+                  <span className="captureSpinner" aria-hidden="true" />
+                  <div>
+                    <span className="eyebrow">Preparing your review</span>
+                    <h2>Checking your jewellery</h2>
+                    <p>Your photo is being prepared and each jewel identified. The review image and details will appear automatically.</p>
+                  </div>
+                </div>
+                <div className="captureLoadingTrack" aria-hidden="true"><span /></div>
+                {capturePreview ? (
+                  <ResultImage src={capturePreview} alt="Original jewellery photo before review processing" label="Original photo · review in progress" />
+                ) : (
+                  <div className="capturePreviewPlaceholder">Preparing your photo…</div>
+                )}
+              </div>
+            )}
+
             {captureTab === "jewellery" && stage === "rejected" && (
               <div className="rejectedReview">
                 <span className="eyebrow errorText">Recapture required</span>
-                <h2>Other objects detected with jewellery</h2>
+                <h2>{active?.rejection_kind === "placement" ? "Separate the jewellery and recapture" : "Other objects detected with jewellery"}</h2>
                 <p role="alert">{active?.rejection_reason}</p>
-                <ResultImage src={media.evidence} alt="Capture containing other objects with jewellery" label="Captured evidence" />
+                <ResultImage src={media.evidence} alt="Capture requiring recapture" label="Captured evidence" />
                 <button className="primary" onClick={recapture} disabled={busy || !cameraReady || !live.scale?.connected || !rois.apriltag}>
                   {busy ? "Please wait..." : "Recapture image"}
                 </button>

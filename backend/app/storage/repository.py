@@ -6,6 +6,7 @@ from copy import deepcopy
 from pathlib import Path
 from threading import RLock
 from typing import Any
+from uuid import uuid4
 
 
 class CaptureRepository:
@@ -16,6 +17,23 @@ class CaptureRepository:
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
         self._initialize()
+        self.start_run()
+
+    def start_run(self) -> None:
+        """Keep saved history separate from this backend run's live workflow."""
+        with self._lock, self._connect() as connection:
+            self.run_id = uuid4().hex
+            self._previous_capture_ids = {
+                str(row["id"]) for row in connection.execute("SELECT id FROM captures")
+            }
+            self._run_captures: dict[str, str] = {}
+
+    def latest_in_run(self) -> dict[str, Any] | None:
+        with self._lock:
+            if not self._run_captures:
+                return None
+            capture_id = max(self._run_captures, key=self._run_captures.get)
+            return self.get(capture_id)
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_path, timeout=10)
@@ -76,6 +94,8 @@ class CaptureRepository:
                         state.get("updated_at", state["captured_at"]),
                     ),
                 )
+            if capture_id not in self._previous_capture_ids:
+                self._run_captures[capture_id] = state["captured_at"]
         return deepcopy(state)
 
     def get(self, capture_id: str) -> dict[str, Any] | None:

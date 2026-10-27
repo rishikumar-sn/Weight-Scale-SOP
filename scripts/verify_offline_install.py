@@ -4,7 +4,7 @@ import argparse
 import json
 import os
 
-from offline_runtime import configure, ROOT, BLOCKED_CONNECTIONS
+from offline_runtime import configure, ROOT, BLOCKED_CONNECTIONS, OCR_MODEL_ROOT, OCR_MODELS
 
 
 def main():
@@ -31,7 +31,8 @@ def main():
     model_root = ROOT / "Classification/siglip2-base-patch16-384"
     SiglipImageProcessor.from_pretrained(str(model_root), local_files_only=True)
     Siglip2Tokenizer.from_pretrained(str(model_root), local_files_only=True)
-    paths = ["models/detection/bead_finder.onnx", "models/packet/barcodescanner.onnx",
+    paths = ["models/detection/bead_finder.onnx", "models/detection/beadfinder_old.onnx",
+             "models/packet/barcodescanner.onnx",
              "models/segmentation/testbed.onnx", "models/segmentation/essaetestbed.onnx",
              "models/segmentation/anomolies.onnx", "Classification/siglip2-base-patch16-384/vision_model.onnx",
              "Classification/siglip2-base-patch16-384/text_model.onnx"]
@@ -61,6 +62,8 @@ def main():
     assert app is not None
     assert not BLOCKED_CONNECTIONS, f"Unexpected connection attempts: {BLOCKED_CONNECTIONS}"
     report = {"status": "passed", "python": __import__("sys").version,
+              "runtime_cache": os.environ["XDG_CACHE_HOME"],
+              "ocr_model_paths": [str(OCR_MODEL_ROOT / name) for name in OCR_MODELS],
               "external_connections": BLOCKED_CONNECTIONS, "ocr": results, "onnx_models_loaded": paths,
               "limits": "Camera, serial scale, complete captures and Linux system libraries require target-device testing."}
     if args.report:

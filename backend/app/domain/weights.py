@@ -86,14 +86,16 @@ def weight_summary(state: dict) -> dict:
     if gross is None:
         note += " Gross scale weight unavailable."
     elif average > gross:
-        note += " Stone estimate exceeds gross weight; recapture before calculating net weight."
+        summary.update(stone_g=gross, stone_min_g=gross, stone_max_g=gross,
+                       net_g=0.0, net_min_g=0.0, net_max_g=0.0)
+        note = "Estimated stone weight is capped at gross scale weight. Net weight is 0.00 g."
     else:
         summary.update(net_g=round(gross - average, 4),
                        net_min_g=round(max(0.0, gross - upper), 4),
                        net_max_g=round(gross - lower, 4))
         if upper > gross:
             note += " Net range is limited to zero at its lower end."
-    if stones.get("found"):
+    if stones.get("found") and not (gross is not None and average > gross):
         note += " Hidden depth and material are estimated; the +1 g allowance is not a validated accuracy bound."
     if ((items[0] if items else result).get("beads") or {}).get("beads_detected"):
         note += " Bead weight is not deducted separately."

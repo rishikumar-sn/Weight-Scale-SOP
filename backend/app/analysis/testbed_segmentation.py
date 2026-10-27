@@ -20,6 +20,7 @@ class TestbedRoi:
     source_roi: dict[str, int]
     processing_roi: dict[str, int]
     confidence: float
+    hole_validation: dict[str, Any] | None = None
 
 
 class TestbedSegmenter:
@@ -65,7 +66,7 @@ class TestbedSegmenter:
         self.testbed_class_id = normalized.get("testbed", 0)
         self.circle_class_id = normalized.get("circle")
 
-    def segment(self, image_bgr: np.ndarray) -> TestbedRoi:
+    def segment(self, image_bgr: np.ndarray, *, apriltag: dict[str, Any] | None = None) -> TestbedRoi:
         if image_bgr is None or image_bgr.ndim != 3 or image_bgr.shape[2] != 3:
             raise ValueError("Testbed segmentation requires a BGR colour image")
 
@@ -81,10 +82,9 @@ class TestbedSegmenter:
         source_mask = self._decode_mask(row[coefficient_start:], prototypes, box, transform, image_bgr.shape[:2])
         source_mask = self._clean_mask(source_mask, fill_holes=self.circle_class_id is not None)
         if self.circle_class_id is not None:
-            try:
-                circle_row, circle_box, _ = self._best_detection(prediction, self.circle_class_id)
-            except RuntimeError as exc:
-                raise RuntimeError("Testbed circular hole was not detected; keep the hole visible and recapture") from exc
+            circle_row, circle_box, hole_validation = self._anchored_circle(
+                prediction, prototypes, transform, image_bgr.shape[:2], apriltag
+            )
             hole = self._decode_mask(circle_row[coefficient_start:], prototypes, circle_box,
                                      transform, image_bgr.shape[:2])
             if not np.any(hole & source_mask):
@@ -98,7 +98,54 @@ class TestbedSegmenter:
             source_mask[hole > 0] = 0
         if not np.any(source_mask):
             raise RuntimeError("The detected testbed mask is empty")
-        return self._square_roi(image_bgr, source_mask, confidence)
+        roi = self._square_roi(image_bgr, source_mask, confidence)
+        return TestbedRoi(roi.image, roi.mask, roi.source_mask, roi.source_roi,
+                          roi.processing_roi, roi.confidence,
+                          hole_validation if self.circle_class_id is not None else None)
+
+    def _anchored_circle(self, prediction, prototypes, transform, source_shape, apriltag):
+        """Locate the fixed Essae fixture in AprilTag coordinates, not by score alone.
+
+        The installed tray has its fixture about 121 mm along the tag's negative
+        Y axis from corner zero. Coordinates are in printed marker widths, so
+        translation, camera rotation and image scale do not change this layout.
+        Other tray layouts must supply their own geometry before using this rule.
+        """
+        points = np.asarray((apriltag or {}).get("corners", []), dtype=np.float64)
+        if not (apriltag or {}).get("found") or points.shape != (4, 2) or not np.isfinite(points).all():
+            raise RuntimeError("Remove the object on the marker and recapture.")
+        canonical = np.array([[0, 0], [1, 0], [1, 1], [0, 1]], dtype=np.float64)
+        matrix, _, rank, _ = np.linalg.lstsq(
+            np.column_stack((points, np.ones(4))), canonical, rcond=None
+        )
+        if rank < 3 or np.linalg.cond(matrix[:2]) > 2.0:
+            raise RuntimeError("Keep the marker and circular hole visible and recapture.")
+        rows = np.asarray(prediction)[0].T
+        scores = rows[:, 4 + self.circle_class_id]
+        valid = np.flatnonzero(np.isfinite(rows).all(axis=1)
+                               & (scores >= self.confidence_threshold)
+                               & (rows[:, 2] > 0) & (rows[:, 3] > 0))
+        candidates = []
+        for index in valid:
+            row = rows[index]
+            cx, cy, width, height = row[:4]
+            box = np.array([cx-width/2, cy-height/2, cx+width/2, cy+height/2], np.float32)
+            mask = self._decode_mask(row[4 + len(self.names):], prototypes, box, transform, source_shape)
+            if not np.any(mask):
+                continue
+            x, y, w, h = cv2.boundingRect(mask)
+            centre = np.array([x + w/2, y + h/2, 1.0]) @ matrix
+            span_x = np.linalg.norm(np.array([w, 0.0]) @ matrix[:2])
+            span_y = np.linalg.norm(np.array([0.0, h]) @ matrix[:2])
+            distance = float(np.linalg.norm(centre - [-0.35, -12.1]))
+            if distance <= 0.9 and 1.3 <= span_x <= 2.3 and 1.3 <= span_y <= 2.3:
+                candidates.append((distance, -float(scores[index]), row, box, centre, (x, y, w, h)))
+        if not candidates:
+            raise RuntimeError("Keep the circular hole clear and visible and recapture.")
+        _, negative_score, row, box, centre, bounds = min(candidates, key=lambda candidate: (candidate[1], candidate[0]))
+        return row, box, {"anchor": "apriltag", "confidence": -negative_score,
+                          "centre_in_tag_widths": centre.tolist(),
+                          "bbox": dict(zip(("x", "y", "w", "h"), bounds))}
 
     def _preprocess(self, image_bgr: np.ndarray) -> tuple[np.ndarray, dict[str, Any]]:
         height, width = image_bgr.shape[:2]

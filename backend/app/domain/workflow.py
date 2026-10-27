@@ -24,7 +24,7 @@ def label_key(value: str | None) -> str:
     return " ".join(str(value or "").replace("/", " ").split()).casefold()
 
 
-def route_for_label(label: str) -> dict[str, Any]:
+def route_for_label(label: str, *, bangle_orientation: str | None = None) -> dict[str, Any]:
     key = label_key(label)
     if key in {"finger ring", "ring"}:
         return {
@@ -41,6 +41,13 @@ def route_for_label(label: str) -> dict[str, Any]:
             "stones": False,
         }
     if key in DIMENSION_LABELS:
+        if bangle_orientation is not None and bangle_orientation != "flat":
+            return {
+                "key": "analysis",
+                "dimension": False,
+                "beads": False,
+                "stones": True,
+            }
         return {
             "key": "dimension",
             "dimension": True,

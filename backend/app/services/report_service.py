@@ -497,9 +497,10 @@ class ReportService:
                 if stones_item:
                     story.append(Paragraph(str(stones_item.get("risk_status") or "Stone analysis complete"), body))
                     if len(result_items) == 1 and stones_item.get("estimated_weight_g") is not None:
+                        weights = weight_summary(state)
                         story.append(Paragraph(
-                            f"Estimated stone weight: {stones_item['estimated_weight_g']:.2f} g; "
-                            f"range: {stones_item['weight_min_g']:.2f} - {stones_item['weight_max_g']:.2f} g",
+                            f"Estimated stone weight: {weights['stone_g']:.2f} g; "
+                            f"range: {weights['stone_min_g']:.2f} - {weights['stone_max_g']:.2f} g",
                             body,
                         ))
                 for warning in item.get("errors") or []:

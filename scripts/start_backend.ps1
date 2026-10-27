@@ -28,6 +28,7 @@ try {
             }
         }
     }
+    # run.py opens the default browser after startup unless a local UI is connected.
     & $pythonCommand run.py
 }
 finally {
