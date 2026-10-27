@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import uuid
+import time
+from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 from threading import RLock
@@ -37,19 +39,60 @@ class CaptureService:
         self.reports = ReportService()
         self._testbed_segmenter: TestbedSegmenter | None = None
         self._testbed_lock = RLock()
+        self._testbed_model = None
+        self._event_lock = RLock()
+        self._scale_events = OrderedDict()
+        self.scale.on_reading = self.record_scale_reading
+
+    def record_scale_reading(self, reading: dict[str, Any]) -> None:
+        # Freeze pixels in the serial reader, before UI polling or model inference.
+        try:
+            if reading.get("unit") != "g":
+                raise RuntimeError("Change the weight scale mode to grams (g), then press the scale button again.")
+            frame, camera_status = self.camera.snapshot_frame()
+            event = (time.monotonic(), frame, camera_status, reading, None)
+        except Exception as exc:
+            event = (time.monotonic(), None, None, reading, str(exc))
+        with self._event_lock:
+            self._scale_events[reading["reading_id"]] = event
+            while len(self._scale_events) > 4:
+                self._scale_events.popitem(last=False)
+
+    def _capture_inputs(self, reading_id: int | None):
+        settings = self.settings_store.get()
+        model = settings.get("scale", {}).get("model") if isinstance(settings, dict) else None
+        if model != "accet_cg1003l":
+            if reading_id is not None:
+                raise RuntimeError("Scale selection changed. Capture again with the selected scale.")
+            frame, camera_status = self.camera.snapshot_frame()
+            return frame, camera_status, self.scale.snapshot()
+        if reading_id is None:
+            raise RuntimeError("Press the ACCET scale button to capture the image and weight.")
+        with self._event_lock:
+            event = self._scale_events.pop(reading_id, None)
+        if event is None or time.monotonic() - event[0] > 3:
+            raise RuntimeError("This scale event expired or was already captured. Press the scale button again.")
+        _, frame, camera_status, reading, error = event
+        if error:
+            raise RuntimeError(error)
+        if reading.get("unit") != "g" or reading.get("weight_g") is None:
+            raise RuntimeError("Change the weight scale mode to grams (g), then press the scale button again.")
+        return frame, camera_status, reading
 
     def _get_testbed_segmenter(self, model: str | None = None) -> TestbedSegmenter:
         with self._testbed_lock:
             model = model or self.settings_store.get()["scale"].get("model", "embsys_wm")
             path = TESTBED_MODEL_PATHS[model]
-            if self._testbed_segmenter is None or self._testbed_segmenter.model_path != path:
+            if self._testbed_segmenter is None or self._testbed_segmenter.model_path != path or self._testbed_model != model:
                 # Drop the previous ONNX session before loading the other scale.
                 self._testbed_segmenter = None
                 self._testbed_segmenter = TestbedSegmenter(
                     path,
                     inset_px=12 if model == "essae_jx500" else 2,
-                    outer_inset_ratio=0.035 if model == "essae_jx500" else 0.0,
+                    outer_inset_ratio=0.035 if model in {"essae_jx500", "accet_cg1003l"} else 0.0,
+                    exclude_circle=model != "accet_cg1003l",
                 )
+            self._testbed_model = model
             return self._testbed_segmenter
 
     def apply_scale(self, model: str) -> dict[str, Any]:
@@ -57,6 +100,8 @@ class CaptureService:
             if model not in TESTBED_MODEL_PATHS:
                 raise ValueError("Unsupported scale model")
             self._get_testbed_segmenter(model)
+            with self._event_lock:
+                self._scale_events.clear()
             return self.settings_store.select_scale(model)
 
     @staticmethod
@@ -146,8 +191,8 @@ class CaptureService:
         )
         return result
 
-    def capture(self) -> dict[str, Any]:
-        frame, camera_snapshot = self.camera.snapshot_frame()
+    def capture(self, reading_id: int | None = None) -> dict[str, Any]:
+        frame, camera_snapshot, scale_snapshot = self._capture_inputs(reading_id)
         settings = self.settings_store.get()
         height, width = frame.shape[:2]
         apriltag_roi = roi_to_pixels(settings["rois"].get("apriltag"), width, height)
@@ -161,8 +206,7 @@ class CaptureService:
             raise RuntimeError("Remove the object on the marker and recapture.") from exc
         calibration = {"available": True, **detected}
         effective_apriltag_roi = apriltag_roi_from_detection(frame.shape, detected)
-        scale_snapshot = self.scale.snapshot()
-        if scale_snapshot.get("unit") not in (None, "g"):
+        if scale_snapshot.get("model") != "accet_cg1003l" and scale_snapshot.get("unit") not in (None, "g"):
             raise RuntimeError("ct capture is not allowed. Switch the scale to grams (g) and try again.")
         weight = scale_snapshot.get("weight_g")
         reading_age_ms = scale_snapshot.get("age_ms")
@@ -259,14 +303,17 @@ class CaptureService:
         self.repository.save(state)
         return state
 
-    def capture_tare(self, mode: str) -> dict[str, Any]:
+    def capture_tare(self, mode: str, reading_id: int | None = None) -> dict[str, Any]:
         """Save a packet tare image with its scale reading and verified packet ID."""
         if mode not in {"pledge", "release"}:
             raise ValueError("Tare mode must be pledge or release")
 
-        frame, camera_snapshot = self.camera.snapshot_frame()
-        scale_snapshot = self.scale.snapshot()
-        if scale_snapshot.get("unit") not in (None, "g"):
+        frame, camera_snapshot, scale_snapshot = self._capture_inputs(reading_id)
+        if scale_snapshot.get("model") == "accet_cg1003l":
+            tag = self.settings_store.get()["apriltag"]
+            detected = detect_apriltag(frame, None, int(tag["id"]), float(tag["width_mm"]), float(tag["height_mm"]))
+            apriltag_roi_from_detection(frame.shape, detected)
+        if scale_snapshot.get("model") != "accet_cg1003l" and scale_snapshot.get("unit") not in (None, "g"):
             raise RuntimeError("ct capture is not allowed. Switch the scale to grams (g) and try again.")
         weight = scale_snapshot.get("weight_g")
         reading_age_ms = scale_snapshot.get("age_ms")

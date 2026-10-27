@@ -22,6 +22,30 @@ data/                    Runtime settings, captures, metadata, and reports
 run.py                   Production entry point
 ```
 
+## ACCET CG1003L
+
+Select **ACCET CG1003L** in **Settings > Scale model** and apply. It uses
+9600 baud; COM11 is the initial Windows preference. USB serial ports are
+monitored until an ACCET packet identifies the scale, and the detected port and
+USB identity are remembered. The connection remains open between button presses.
+
+Close settings, select jewellery capture or the required pledge/release tare
+mode, and press the scale's transmit/print button. Each valid packet freezes the
+camera image and its reading together. Software capture is disabled for this
+model. Jewellery capture continues through the usual classification,
+foreign-object rejection, confirmation, and analysis flow. Presses during setup,
+or processing do not replace the current review. During confirmation, another
+button press recaptures directly and saves the previous review corrections.
+A new press can also capture again from rejection, failure, or completed results.
+
+The configured AprilTag must be detected in every captured image, including
+ACCET tare images. The ACCET uses `models/segmentation/essaetestbed.onnx` for its
+testbed, with the circular-hole class ignored. Other scales retain their existing
+segmentation rules. Signed readings retain their source unit. Capture is allowed only when the scale
+reports grams (`g`); kg, mg, ct, GSM, and other units are blocked without taking
+a camera snapshot. The UI asks the operator to change the weight scale mode to
+grams and press its button again.
+
 ## Foreign-object rejection
 
 Jewellery captures first pass the existing per-item non-jewellery checks. When

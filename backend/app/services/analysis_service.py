@@ -50,6 +50,7 @@ BEAD_NMS_SMALL_IOU = 0.45
 BEAD_NMS_MEDIUM_IOU = 0.60
 BEAD_NMS_LARGE_IOU = 0.72
 BEAD_DETECTION_SCORE_THRESHOLD = 0.35
+BEAD_OLD_MODEL_SCORE_THRESHOLD = 0.50
 FINGER_RING_MAX_OUTER_SPAN_MM = 35.0
 BANGLE_MIN_OUTER_SPAN_MM = 40.0
 
@@ -279,7 +280,11 @@ class OnnxBeadDetector:
         for detector in models:
             # Every model receives the same untouched full-frame image, with
             # its own metadata-derived letterbox size (960 or 640).
-            model_boxes, model_scores = detector._predict(image, threshold)
+            model_threshold = (
+                BEAD_OLD_MODEL_SCORE_THRESHOLD
+                if detector.model_name == "beadfinder_old.onnx" else threshold
+            )
+            model_boxes, model_scores = detector._predict(image, model_threshold)
             accepted = 0
             for box, score in zip(model_boxes, model_scores):
                 if not _box_center_in_region(box, detection_region):
@@ -294,6 +299,7 @@ class OnnxBeadDetector:
                 accepted += 1
             model_results.append({
                 "model": detector.model_name,
+                "score_threshold": float(model_threshold),
                 "model_input_size": {
                     "height": detector.input_size[0], "width": detector.input_size[1],
                 },
@@ -327,7 +333,9 @@ class OnnxBeadDetector:
             "decision_source": "onnx_ensemble" if len(models) > 1 else "onnx_detector",
             "decision_reason": (
                 f"The {len(models)} detector(s) found {len(detections)} merged candidate"
-                f"{'s' if len(detections) != 1 else ''} at confidence {threshold:.2f}."
+                f"{'s' if len(detections) != 1 else ''} using confidence thresholds "
+                + ", ".join(f"{model['model']}: {model['score_threshold']:.2f}" for model in model_results)
+                + "."
             ),
             **bead_analysis,
             "models": model_results,

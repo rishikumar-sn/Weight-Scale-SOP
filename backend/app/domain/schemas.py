@@ -61,4 +61,4 @@ class CameraRotationSettings(BaseModel):
 
 
 class ScaleSettings(BaseModel):
-    model: Literal["embsys_wm", "essae_jx500"]
+    model: Literal["embsys_wm", "essae_jx500", "accet_cg1003l"]

@@ -1,8 +1,13 @@
+from unittest.mock import Mock, patch
+
+import numpy as np
+
 from backend.app.services.analysis_service import (
     BEAD_DETECTION_SCORE_THRESHOLD,
     BEAD_NMS_LARGE_IOU,
     BEAD_NMS_MEDIUM_IOU,
     BEAD_NMS_SMALL_IOU,
+    OnnxBeadDetector,
     _adaptive_bead_nms,
     _bead_nms_iou_threshold,
     _box_center_in_region,
@@ -11,6 +16,35 @@ from backend.app.services.analysis_service import (
 
 def test_bead_model_thresholds_match_production_settings():
     assert BEAD_DETECTION_SCORE_THRESHOLD == 0.35
+
+
+def test_ensemble_filters_old_model_at_half_confidence_and_keeps_new_model_threshold():
+    def detector(name, rows):
+        result = OnnxBeadDetector.__new__(OnnxBeadDetector)
+        result.model_name = name
+        result.input_size = (100, 100)
+        result.input_name = "images"
+        result.model_metadata = {}
+        result.additional_detectors = []
+        result.session = Mock()
+        result.session.run.return_value = [np.array(rows, dtype=np.float32)]
+        return result
+
+    new = detector("bead_finder.onnx", [[20, 20, 10, 10, .40]])
+    old = detector("beadfinder_old.onnx", [
+        [50, 50, 10, 10, .499], [80, 80, 10, 10, .50],
+    ])
+    new.additional_detectors = [old]
+    image = np.full((100, 100, 3), 255, dtype=np.uint8)
+    with patch("backend.app.services.analysis_service.render_bead_evidence", return_value=image):
+        result, _, _ = new.run(image)
+    assert result["count"] == 2
+    assert {(d["model"], d["score"]) for d in result["detections"]} == {
+        ("bead_finder.onnx", .40), ("beadfinder_old.onnx", .50),
+    }
+    assert {model["model"]: model["score_threshold"] for model in result["models"]} == {
+        "bead_finder.onnx": .35, "beadfinder_old.onnx": .50,
+    }
 
 
 def test_nms_iou_threshold_tracks_bead_size_relative_to_image():

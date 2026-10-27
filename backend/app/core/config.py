@@ -18,6 +18,7 @@ DATABASE_PATH = DATA_DIR / "app.db"
 TESTBED_MODEL_PATH = PROJECT_ROOT / "models" / "segmentation" / "testbed.onnx"
 TESTBED_MODEL_PATHS = {
     "embsys_wm": TESTBED_MODEL_PATH,
+    "accet_cg1003l": PROJECT_ROOT / "models" / "segmentation" / "essaetestbed.onnx",
     "essae_jx500": PROJECT_ROOT / "models" / "segmentation" / "essaetestbed.onnx",
 }
 FOREIGN_OBJECT_MODEL_PATH = PROJECT_ROOT / "models" / "segmentation" / "anomolies.onnx"
@@ -174,7 +175,7 @@ class SettingsStore:
             return self.get()
 
     def select_scale(self, model: str) -> dict[str, Any]:
-        if model not in {"embsys_wm", "essae_jx500"}:
+        if model not in TESTBED_MODEL_PATHS:
             raise ValueError("Unsupported scale model")
         with self._lock:
             current = self.get()["scale"]
@@ -182,7 +183,7 @@ class SettingsStore:
             previous_model = current.get("model", "embsys_wm")
             devices[previous_model] = {key: current.get(key, "") for key in ("port", "baud_rate", "usb_identity")}
             selected = devices.get(model, {
-                "port": "COM11" if self.platform == "windows" and model == "essae_jx500" else "",
+                "port": "COM11" if self.platform == "windows" and model in {"essae_jx500", "accet_cg1003l"} else "",
                 "usb_identity": "",
             })
             return self.update({"scale": {

@@ -37,6 +37,7 @@ class TestbedSegmenter:
         inset_px: int = 2,
         outer_inset_ratio: float = 0.0,
         providers: list[str] | None = None,
+        exclude_circle: bool = True,
     ) -> None:
         self.model_path = Path(model_path)
         if not self.model_path.is_file():
@@ -64,7 +65,7 @@ class TestbedSegmenter:
                       for key, name in self.names.items()}
         # ForeignObjectDetector also reuses this decoder for its own class set.
         self.testbed_class_id = normalized.get("testbed", 0)
-        self.circle_class_id = normalized.get("circle")
+        self.circle_class_id = normalized.get("circle") if exclude_circle else None
 
     def segment(self, image_bgr: np.ndarray, *, apriltag: dict[str, Any] | None = None) -> TestbedRoi:
         if image_bgr is None or image_bgr.ndim != 3 or image_bgr.shape[2] != 3:

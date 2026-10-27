@@ -93,15 +93,20 @@
         }
       },
       "scale": {
-        "model": "essae_jx500",
+        "model": "accet_cg1003l",
         "port": "COM11",
-        "baud_rate": 115200,
+        "baud_rate": 9600,
         "usb_identity": "1027:24577:A5069RR4A",
         "devices": {
           "embsys_wm": {
             "port": "COM12",
             "baud_rate": 9600,
             "usb_identity": ""
+          },
+          "essae_jx500": {
+            "port": "COM11",
+            "baud_rate": 115200,
+            "usb_identity": "1027:24577:A5069RR4A"
           }
         }
       }

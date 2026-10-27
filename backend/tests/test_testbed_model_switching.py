@@ -1,6 +1,6 @@
 from pathlib import Path
-from threading import RLock
 import weakref
+from unittest.mock import Mock
 
 import pytest
 
@@ -9,10 +9,7 @@ from backend.app.services.capture_service import CaptureService
 
 
 def service_for_settings(path):
-    service = CaptureService.__new__(CaptureService)
-    service.settings_store = SettingsStore(path)
-    service._testbed_lock = RLock()
-    service._testbed_segmenter = None
+    service = CaptureService(Mock(), Mock(), SettingsStore(path), Mock())
     return service
 
 
@@ -21,21 +18,23 @@ def test_apply_switches_models_releases_previous_and_restores_on_startup(tmp_pat
     loaded = []
 
     class Segmenter:
-        def __init__(self, path, *, inset_px, outer_inset_ratio):
+        def __init__(self, path, *, inset_px, outer_inset_ratio, exclude_circle):
             assert previous is None or previous() is None
             self.model_path = Path(path)
-            loaded.append((self.model_path, inset_px, outer_inset_ratio))
+            loaded.append((self.model_path, inset_px, outer_inset_ratio, exclude_circle))
 
     monkeypatch.setattr("backend.app.services.capture_service.TestbedSegmenter", Segmenter)
     service = service_for_settings(tmp_path / "settings.json")
-    for model in ("embsys_wm", "essae_jx500", "embsys_wm"):
+    for model in ("embsys_wm", "essae_jx500", "accet_cg1003l", "essae_jx500", "embsys_wm"):
         saved = service.apply_scale(model)
         assert saved["scale"]["model"] == model
         assert service._get_testbed_segmenter() is service._testbed_segmenter
         previous = weakref.ref(service._testbed_segmenter)
-    assert loaded == [(TESTBED_MODEL_PATHS["embsys_wm"], 2, 0.0),
-                      (TESTBED_MODEL_PATHS["essae_jx500"], 12, 0.035),
-                      (TESTBED_MODEL_PATHS["embsys_wm"], 2, 0.0)]
+    assert loaded == [(TESTBED_MODEL_PATHS["embsys_wm"], 2, 0.0, True),
+                      (TESTBED_MODEL_PATHS["essae_jx500"], 12, 0.035, True),
+                      (TESTBED_MODEL_PATHS["accet_cg1003l"], 2, 0.035, False),
+                      (TESTBED_MODEL_PATHS["essae_jx500"], 12, 0.035, True),
+                      (TESTBED_MODEL_PATHS["embsys_wm"], 2, 0.0, True)]
     service._testbed_segmenter = None
     restarted = service_for_settings(tmp_path / "settings.json")
     assert restarted._get_testbed_segmenter().model_path == TESTBED_MODEL_PATHS["embsys_wm"]

@@ -1,3 +1,4 @@
+import { scaleCaptureAction } from "./scaleCapture";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Roi = { x: number; y: number; width: number; height: number };
@@ -122,6 +123,8 @@ export default function App() {
   const videoRetryRef = useRef<number | null>(null);
   const cameraWasConnectedRef = useRef(false);
   const markerRefreshAttemptedRef = useRef(false);
+  const scaleEventRef = useRef<number | null>(null);
+  const scaleCaptureBusyRef = useRef(false);
   const backendRunRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -221,6 +224,7 @@ export default function App() {
       backendRunRef.current = payload.run_id;
       setLive(payload);
       if (restarted) {
+        scaleEventRef.current = null;
         setActive(null);
         setCapturePending(false);
         setCapturePreview(null);
@@ -410,6 +414,13 @@ export default function App() {
   }
 
   function checkCaptureUnit() {
+    if (live.scale?.model === "accet_cg1003l") {
+      if (live.scale?.unit !== "g") {
+        setError("Change the weight scale mode to grams (g), then press the scale button again.");
+        return false;
+      }
+      return true;
+    }
     if (live.scale?.connected && live.scale?.unit === "ct") {
       window.alert("ct capture is not allowed. Switch the scale to grams (g) and try again.");
       return false;
@@ -478,15 +489,23 @@ export default function App() {
     setCapturePending(true);
   }
 
-  async function capture(reusePreview = false) {
+  async function capture(reusePreview = false, readingId?: number, savePreviousCorrections = false) {
     if (!checkCaptureUnit()) return;
     if (!reusePreview) showCapturePreview();
     setBusy(true);
     setError("");
     setMessage("Capturing jewellery and weight...");
     try {
-      const captured = await requestJson("/api/captures", { method: "POST" });
+      const captured = await requestJson(`/api/captures${readingId === undefined ? "" : `?reading_id=${readingId}`}`, { method: "POST" });
       setActive(captured);
+      // Claim the frozen event before saving corrections, which can take longer
+      // than the serial event's freshness window.
+      if (savePreviousCorrections && active?.status === "awaiting_confirmation") {
+        setMessage("Saving manual corrections for gallery matching...");
+        await requestJson(`/api/captures/${active.id}/corrections`, {
+          method: "POST", body: JSON.stringify(classificationPayload()),
+        });
+      }
       if (captured.media?.original) setCapturePreview(captured.media.original);
       setMessage("Checking the item type...");
       const classified = await requestJson(`/api/captures/${captured.id}/item-type`, { method: "POST" });
@@ -510,13 +529,13 @@ export default function App() {
     }
   }
 
-  async function captureTare() {
+  async function captureTare(readingId?: number) {
     if (!checkCaptureUnit()) return;
     setBusy(true);
     setError("");
     setMessage(`Capturing ${tareMode} tare weight...`);
     try {
-      const captured = await requestJson("/api/tare-captures", {
+      const captured = await requestJson(`/api/tare-captures${readingId === undefined ? "" : `?reading_id=${readingId}`}`, {
         method: "POST",
         body: JSON.stringify({ mode: tareMode }),
       });
@@ -542,6 +561,11 @@ export default function App() {
   }
 
   async function recapture() {
+    if (live.scale?.model === "accet_cg1003l") {
+      setError("");
+      setMessage("Press the ACCET scale button in grams (g) to recapture. Your corrections will be saved with the next capture.");
+      return;
+    }
     if (!checkCaptureUnit()) return;
     showCapturePreview();
     setBusy(true);
@@ -602,9 +626,26 @@ export default function App() {
     return "capture";
   }, [active, capturePending]);
 
+  const scaleButtonCapture = live.scale?.model === "accet_cg1003l";
+  useEffect(() => {
+    const id = live.scale?.capture_event_id;
+    const previous = scaleEventRef.current;
+    scaleEventRef.current = id == null ? previous : Math.max(previous ?? 0, id);
+    // Establish a baseline on load. Never replay a previous button press.
+    if (!scaleButtonCapture || previous === null || !id || id <= previous) return;
+    const action = scaleCaptureAction({
+      setupOpen, busy: busy || scaleCaptureBusyRef.current, settingsSaving,
+      cameraReady, captureTab, stage, ageMs: live.scale?.age_ms,
+    });
+    if (!action) return;
+    scaleCaptureBusyRef.current = true;
+    const task = action === "tare" ? captureTare(id) : capture(false, id, action === "recapture");
+    void task.finally(() => { scaleCaptureBusyRef.current = false; });
+  }, [live.scale?.capture_event_id, scaleButtonCapture]);
+
   const weight = live.scale?.connected ? (live.scale?.value ?? live.scale?.weight_g) : undefined;
   const weightUnit = live.scale?.unit || "g";
-  const weightPrecision = live.scale?.model === "essae_jx500" ? 3 : 2;
+  const weightPrecision = live.scale?.model !== "embsys_wm" ? 3 : 2;
   const result = active?.result || {};
   const media = active?.media || {};
   const detectedItems = active?.classification?.items || [];
@@ -752,8 +793,11 @@ export default function App() {
                   <select id="scale-model" value={scaleModel} disabled={settingsSaving} onChange={event => { setScaleModel(event.target.value); setSettingsNotice(""); }}>
                     <option value="embsys_wm">EMBSYS WM</option>
                     <option value="essae_jx500">ESSAE JX500</option>
+                    <option value="accet_cg1003l">ACCET CG1003L</option>
                   </select>
-                  <p>ESSAE JX500 finds its USB port automatically, including when the port number changes. Its decoded USB output must be connected.</p>
+                  {scaleModel === "accet_cg1003l"
+                    ? <p>ACCET CG1003L uses 9600 baud and detects its USB port when you press the scale button. After applying, close settings and press the scale button to capture the selected jewellery or tare process. Keep the AprilTag visible for every capture. Capture works only in grams (g). For any other unit, change the weight scale mode to grams before pressing the scale button.</p>
+                    : <p>ESSAE JX500 finds its USB port automatically, including when the port number changes. Its decoded USB output must be connected.</p>}
                   <div className="filterStatus" role="status"><strong>{live.scale?.status || "Waiting for scale"}</strong><span>{live.scale?.port || "Searching for USB scale"}</span>{live.scale?.error && <span>{live.scale.error}</span>}</div>
                   <button className="primary" disabled={settingsSaving || busy || stage === "processing"} onClick={saveScale}>{settingsSaving ? "Applying..." : "Apply scale"}</button>
                 </> : settingsSection === "rotation" ? <>
@@ -806,8 +850,8 @@ export default function App() {
                   <strong>{typeof weight === "number" ? `${weight.toFixed(weightPrecision)} ${weightUnit}` : "Waiting..."}</strong>
                   <time dateTime={currentTime.toISOString()}>{liveDate} · {liveTime}</time>
                 </div>
-                <button className="primary captureButton" onClick={() => capture()} disabled={busy || !cameraReady || !live.scale?.connected || !rois.apriltag}>
-                  {busy ? "Please wait..." : "Capture jewellery"}
+                <button className="primary captureButton" onClick={() => capture()} disabled={scaleButtonCapture || busy || !cameraReady || !live.scale?.connected || (!scaleButtonCapture && !rois.apriltag)}>
+                  {busy ? "Please wait..." : scaleButtonCapture ? "Press the scale button to capture" : "Capture jewellery"}
                 </button>
                 {!rois.apriltag && <p className="hint">Keep the AprilTag visible so its area can be detected automatically.</p>}
               </div>
@@ -838,8 +882,8 @@ export default function App() {
                 <h2>{active?.rejection_kind === "placement" ? "Separate the jewellery and recapture" : "Other objects detected with jewellery"}</h2>
                 <p role="alert">{active?.rejection_reason}</p>
                 <ResultImage src={media.evidence} alt="Capture requiring recapture" label="Captured evidence" />
-                <button className="primary" onClick={recapture} disabled={busy || !cameraReady || !live.scale?.connected || !rois.apriltag}>
-                  {busy ? "Please wait..." : "Recapture image"}
+                <button className="primary" onClick={recapture} disabled={busy || !cameraReady || !live.scale?.connected || (!scaleButtonCapture && !rois.apriltag)}>
+                  {busy ? "Please wait..." : scaleButtonCapture ? "Press scale button to recapture" : "Recapture image"}
                 </button>
               </div>
             )}
@@ -890,9 +934,9 @@ export default function App() {
                       <button
                         className="secondary"
                         onClick={recapture}
-                        disabled={busy || !cameraReady || !live.scale?.connected || !rois.apriltag}
+                        disabled={busy || !cameraReady || !live.scale?.connected || (!scaleButtonCapture && !rois.apriltag)}
                       >
-                        {busy ? "Please wait..." : "Recapture image"}
+                        {busy ? "Please wait..." : scaleButtonCapture ? "Press scale button to recapture" : "Recapture image"}
                       </button>
                       <button className="primary" onClick={confirmItems} disabled={busy || !canConfirmItems}>
                         Confirm all and analyze
@@ -1008,8 +1052,8 @@ export default function App() {
                   <strong>{typeof weight === "number" ? `${weight.toFixed(weightPrecision)} ${weightUnit}` : "Waiting..."}</strong>
                   <time dateTime={currentTime.toISOString()}>{liveDate} · {liveTime}</time>
                 </div>
-                <button className="primary captureButton" onClick={captureTare} disabled={busy || !cameraReady || !live.scale?.connected}>
-                  {busy ? "Please wait..." : `Capture ${tareMode} tare`}
+                <button className="primary captureButton" onClick={() => captureTare()} disabled={scaleButtonCapture || busy || !cameraReady || !live.scale?.connected}>
+                  {busy ? "Please wait..." : scaleButtonCapture ? `Press scale button for ${tareMode} tare` : `Capture ${tareMode} tare`}
                 </button>
                 {tareCapture && (
                   <div className="tareResult">

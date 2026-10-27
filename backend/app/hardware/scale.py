@@ -6,6 +6,7 @@ import re
 import threading
 import time
 from datetime import datetime
+from contextlib import contextmanager
 from typing import Any
 
 import serial
@@ -14,6 +15,8 @@ import serial.tools.list_ports
 
 WEIGHT_LINE = re.compile(rb"^\s*([-+]?\d+(?:\.\d+)?)\s*(?:g|gm)?\s*$", re.IGNORECASE)
 ESSAE_WEIGHT_LINE = re.compile(rb"\bWEIGHT\s*=\s*([+-]?\d+(?:\.\d+)?)\s+(ct|g)\b", re.IGNORECASE)
+
+ACCET_WEIGHT_LINE = re.compile(rb"^\s*(ST|US),\s*(GS|NT),\s*([+-]?)\s*(\d+(?:\.\d+)?)\s*([a-zA-Z]+)\s*$", re.IGNORECASE)
 
 
 class ScaleService:
@@ -40,6 +43,9 @@ class ScaleService:
         self._status = "Scale is starting"
         self._error = ""
         self._discarded = 0
+        self._reading_id = 0
+        self._capture_event_id = 0
+        self.on_reading = None
 
     def _invalidate(self, status: str, error: str = "") -> None:
         with self._lock:
@@ -99,11 +105,11 @@ class ScaleService:
             self._failed_ports.clear()
             available = ports
         if not available:
-            raise RuntimeError("ESSAE JX500 not detected; waiting for USB connection")
+            raise RuntimeError("USB scale not detected; waiting for USB connection")
         return available[0].device
 
     def _select_port(self) -> str:
-        if self._settings_provider()["scale"].get("model") == "essae_jx500":
+        if self._settings_provider()["scale"].get("model") in {"essae_jx500", "accet_cg1003l"}:
             return self._select_essae_port()
         settings = self._settings_provider()["scale"]
         configured = str(settings.get("port") or "").strip()
@@ -166,7 +172,7 @@ class ScaleService:
         except ValueError:
             return None
 
-    def _read_connection(self, connection, port: str) -> None:
+    def _read_connection(self, connection, port: str, initial_chunk: bytes = b"") -> None:
         pending = bytearray()
         dropping = False
         last_valid = time.monotonic()
@@ -176,7 +182,8 @@ class ScaleService:
         while not self._stop.is_set() and not self._reconnect.is_set():
             if port.startswith("/dev/") and not os.path.exists(port):
                 raise serial.SerialException("USB scale was unplugged; waiting for reconnection")
-            chunk = connection.read(min(512, connection.in_waiting or 1))
+            chunk = initial_chunk or connection.read(min(512, connection.in_waiting or 1))
+            initial_chunk = b""
             if self._stop.is_set() or self._reconnect.is_set():
                 return
             for byte in chunk:
@@ -196,6 +203,12 @@ class ScaleService:
                         unit = match.group(2).decode("ascii").lower() if match else ""
                         if value is not None and not math.isfinite(value):
                             value = None
+                    elif model == "accet_cg1003l":
+                        match = ACCET_WEIGHT_LINE.fullmatch(raw)
+                        value = float(match.group(3) + match.group(4)) if match else None
+                        unit = match.group(5).decode("ascii").lower() if match else ""
+                        if value is not None and not math.isfinite(value):
+                            value = None
                     else:
                         value = self._parse(raw)
                     if value is None:
@@ -207,6 +220,7 @@ class ScaleService:
                     with self._lock:
                         if self._reconnect.is_set() or self._stop.is_set():
                             return
+                        self._reading_id += 1
                         self._weight = value
                         self._unit = unit
                         self._reading_time = now
@@ -214,7 +228,11 @@ class ScaleService:
                         self._raw = raw.decode("ascii", errors="ignore").strip()
                         self._status = "Scale connected"
                         self._error = ""
-                    if (model == "essae_jx500" or os.name == "nt") and not remembered:
+                    if model == "accet_cg1003l" and self.on_reading:
+                        self.on_reading(self.snapshot())
+                        with self._lock:
+                            self._capture_event_id = self._reading_id
+                    if (model in {"essae_jx500", "accet_cg1003l"} or os.name == "nt") and not remembered:
                         remembered = True
                         self._failed_ports.clear()
                         if self._remember_device:
@@ -233,8 +251,82 @@ class ScaleService:
                     else:
                         pending.append(byte)
             timeout = 3.5 if model == "essae_jx500" else self.READING_TIMEOUT_SECONDS
+            if model == "accet_cg1003l":
+                # Button-driven scales may remain silent indefinitely once identified.
+                if remembered:
+                    continue
+                timeout = 15.0
             if time.monotonic() - last_valid >= timeout:
                 raise serial.SerialException("No fresh scale readings; reopening USB connection")
+
+    @contextmanager
+    def _accet_connection(self):
+        """Listen on all candidates: silence cannot identify a button-driven scale."""
+        connections = {}
+        buffers = {}
+        next_scan = 0.0
+        settings = self._settings_provider()["scale"]
+        preferred = settings.get("port", "")
+        identity = settings.get("usb_identity", "")
+        try:
+            while not self._stop.is_set() and not self._reconnect.is_set():
+                now = time.monotonic()
+                if now >= next_scan:
+                    ports = [p for p in serial.tools.list_ports.comports()
+                             if getattr(p, "vid", None) is not None
+                             or p.device.startswith(("COM", "/dev/ttyUSB", "/dev/ttyACM"))]
+                    ports.sort(key=lambda p: (not bool(identity and self._port_identity(p) == identity),
+                                             p.device.casefold() != preferred.casefold(), p.device))
+                    devices = {p.device for p in ports}
+                    for port in list(connections):
+                        if port not in devices:
+                            connections.pop(port).close()
+                            buffers.pop(port, None)
+                    for item in ports:
+                        if item.device in connections:
+                            continue
+                        try:
+                            options = {"exclusive": True} if os.name != "nt" else {}
+                            connection = serial.Serial(item.device, 9600, timeout=0, **options)
+                            connections[item.device] = connection
+                            buffers[item.device] = bytearray()
+                        except (serial.SerialException, OSError):
+                            continue
+                    with self._lock:
+                        self._port = ", ".join(connections)
+                        self._status = "Press the ACCET scale button to detect its USB port" if connections else "Waiting for ACCET USB connection"
+                    next_scan = now + 1.0
+                for port, connection in list(connections.items()):
+                    try:
+                        chunk = connection.read(min(512, connection.in_waiting))
+                    except (serial.SerialException, OSError):
+                        connections.pop(port).close()
+                        buffers.pop(port, None)
+                        continue
+                    pending = buffers[port]
+                    for index, byte in enumerate(chunk):
+                        if byte in (10, 13):
+                            raw = bytes(pending)
+                            pending.clear()
+                            if ACCET_WEIGHT_LINE.fullmatch(raw):
+                                for other_port, other in list(connections.items()):
+                                    if other_port != port:
+                                        other.close()
+                                        del connections[other_port]
+                                connection.timeout = self.SERIAL_TIMEOUT_SECONDS
+                                with self._lock:
+                                    self._port = port
+                                yield connection, port, raw + b"\n" + chunk[index + 1:]
+                                return
+                        else:
+                            pending.append(byte)
+                            if len(pending) > 8192:
+                                pending.clear()
+                self._stop.wait(0.02)
+            yield None, "", b""
+        finally:
+            for connection in connections.values():
+                connection.close()
 
     def _run(self) -> None:
         try:
@@ -246,6 +338,13 @@ class ScaleService:
                     self._reconnect.clear()
                     settings = self._settings_provider()["scale"]
                     self._model = settings.get("model", "embsys_wm")
+                    if self._model == "accet_cg1003l":
+                        with self._accet_connection() as (connection, port, initial):
+                            if connection is not None:
+                                with self._lock:
+                                    self._port_open = True
+                                self._read_connection(connection, port, initial)
+                        continue
                     port = self._select_port()
                     baud = 115200 if self._model == "essae_jx500" else int(settings["baud_rate"])
                     with self._lock:
@@ -259,7 +358,7 @@ class ScaleService:
                             self._error = ""
                         self._read_connection(connection, port)
                 except Exception as exc:  # noqa: BLE001
-                    if port and (self._model == "essae_jx500" or os.name == "nt"):
+                    if port and (self._model in {"essae_jx500", "accet_cg1003l"} or os.name == "nt"):
                         self._failed_ports.add(port)
                     self._invalidate("Scale reconnecting", str(exc))
                     self._reconnect.wait(self.RECONNECT_INTERVAL_SECONDS)
@@ -280,16 +379,22 @@ class ScaleService:
             status = self._status
             if self._port_open and not fresh:
                 status = "Scale waiting for data"
+            grams = self._weight if fresh and self._unit == "g" else None
+            if grams is not None and not math.isfinite(grams):
+                grams = None
             return {
-                "connected": fresh,
+                "connected": self._port_open if self._model == "accet_cg1003l" else fresh,
+                "reading_id": self._reading_id,
+                "capture_event_id": self._capture_event_id,
+                "capture_trigger": "scale_button" if self._model == "accet_cg1003l" else "software",
                 "status": status,
                 "error": self._error,
                 "port": self._port,
                 "model": self._model,
                 "value": self._weight if fresh else None,
                 "unit": self._unit if fresh else None,
-                "capture_allowed": bool(fresh and self._unit == "g"),
-                "weight_g": self._weight if fresh and self._unit == "g" else None,
+                "capture_allowed": grams is not None,
+                "weight_g": grams,
                 "reading_at": self._reading_time.isoformat(timespec="milliseconds") if fresh and self._reading_time else None,
                 "age_ms": age_ms,
                 "raw": self._raw if fresh else "",

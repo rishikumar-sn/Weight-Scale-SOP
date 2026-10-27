@@ -254,17 +254,17 @@ def refresh_apriltag_roi():
 
 
 @app.post("/api/captures")
-def create_capture():
+def create_capture(reading_id: int | None = None):
     try:
-        return _public_capture(captures.capture())
+        return _public_capture(captures.capture(reading_id=reading_id))
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.post("/api/tare-captures")
-def create_tare_capture(payload: TareCaptureRequest):
+def create_tare_capture(payload: TareCaptureRequest, reading_id: int | None = None):
     try:
-        return _public_capture(captures.capture_tare(payload.mode))
+        return _public_capture(captures.capture_tare(payload.mode, reading_id=reading_id))
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
