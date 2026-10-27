@@ -15,4 +15,4 @@ Write-Host "Restarting $($scaleDevices[0].FriendlyName)"
 if ($LASTEXITCODE -ne 0) {
     throw "Windows could not restart the CH340 device."
 }
-Write-Host "Scale adapter restarted. Start the backend now; do not open COM12 in another app."
+Write-Host "Scale adapter restarted. Start the backend now; keep the scale's serial port closed in other apps. The backend detects its COM number automatically."

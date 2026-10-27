@@ -11,7 +11,7 @@ try {
             Where-Object { $_.InstanceId -like "USB\VID_1A86&PID_7523*" } |
             Select-Object -First 1
         if ($scaleDevice) {
-            Write-Host "Resetting the connected scale adapter before opening COM12..."
+            Write-Host "Resetting the connected scale adapter before automatic port detection..."
             $restartScript = Join-Path $PSScriptRoot "restart_scale_windows.ps1"
             try {
                 $restart = Start-Process -FilePath "powershell.exe" -Verb RunAs -Wait -PassThru -ArgumentList @(
@@ -20,11 +20,11 @@ try {
                     "-File", ('"' + $restartScript + '"')
                 )
                 if ($restart.ExitCode -ne 0) {
-                    Write-Warning "Windows did not reset the scale adapter. The backend will still start and retry COM12. If the scale stays red, unplug and reconnect its USB cable once."
+                    Write-Warning "Windows did not reset the scale adapter. The backend will still start and detect the scale port automatically. If the scale stays red, unplug and reconnect its USB cable once."
                 }
             }
             catch {
-                Write-Warning "The scale reset could not be run. The backend will still start and retry COM12. If the scale stays red, unplug and reconnect its USB cable once."
+                Write-Warning "The scale reset could not be run. The backend will still start and detect the scale port automatically. If the scale stays red, unplug and reconnect its USB cable once."
             }
         }
     }

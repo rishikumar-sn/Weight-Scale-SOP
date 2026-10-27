@@ -52,6 +52,15 @@ If the CH340/CH341 scale adapter is not recognized, run the included
 [official release](https://github.com/WCH-IC/download/releases/tag/CH341).
 Other USB chipsets require their manufacturer's matching offline driver.
 
+EMBSYS WM detects its Windows COM port automatically, even when a copied
+installation has a saved port from another PC. It prefers the remembered USB
+identity (when the adapter supplies a serial number), then the saved port and
+CH340 adapters. If a candidate is busy or produces no valid weight readings,
+it tries the next available serial port. The working port is saved only after
+a valid weight reading. Unplugging and reconnecting also repeats detection;
+there is no need to assign COM12 in Device Manager. Keep other serial-monitor
+apps closed so this app can open the scale port.
+
 ## Ubuntu 22.04/24.04 Intel/AMD x86_64
 
 Use the normal operator account, not a root shell. Open a terminal in the copied

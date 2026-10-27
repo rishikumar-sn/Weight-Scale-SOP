@@ -40,7 +40,7 @@ def test_saved_methods_survive_restarts_and_switching_platforms(tmp_path):
                   "scale": {"port": "/dev/serial/by-id/my-scale"}})
     windows = SettingsStore(path, platform="windows")
     assert windows.get()["camera"]["anti_flicker_mode"] == "average_90"
-    assert windows.get()["scale"]["port"] == "COM12"
+    assert windows.get()["scale"]["port"] == ""
     windows.update({"rois": {"processing": {"x": 0.1, "y": 0.2, "width": 0.5, "height": 0.5}}})
     linux = SettingsStore(path, platform="linux")
     assert linux.get()["camera"]["anti_flicker_mode"] == "shutter_50"

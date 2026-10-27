@@ -79,18 +79,25 @@ def test_fragmented_debug_stream_displays_ct_without_exposing_grams():
 @pytest.mark.parametrize("method,args", [("capture", ()), ("capture_tare", ("pledge",)), ("capture_tare", ("release",))])
 def test_capture_rejects_ct_before_saving(method, args):
     camera = Mock()
-    camera.snapshot_frame.return_value = (Mock(), {})
+    camera.snapshot_frame.return_value = (SimpleNamespace(shape=(100, 100, 3)), {})
     scale = Mock()
     scale.snapshot.return_value = {"connected": True, "unit": "ct", "weight_g": 123, "age_ms": 0}
     repository = Mock()
-    service = CaptureService(camera, scale, Mock(), repository)
-    with pytest.raises(RuntimeError, match="ct capture is not allowed"):
+    settings = Mock()
+    settings.get.return_value = {"rois": {"apriltag": None}, "apriltag": {
+        "id": 1, "width_mm": 10, "height_mm": 10,
+    }}
+    service = CaptureService(camera, scale, settings, repository)
+    with patch("backend.app.services.capture_service.detect_apriltag", return_value={}), \
+         patch("backend.app.services.capture_service.apriltag_roi_from_detection", return_value=None), \
+         pytest.raises(RuntimeError, match="ct capture is not allowed"):
         getattr(service, method)(*args)
     repository.session_dir.assert_not_called()
 
 
-def test_worker_reconnects_after_unplugging_at_a_new_port():
-    settings = {"scale": {"model": "essae_jx500", "port": "COM11", "baud_rate": 115200}}
+@pytest.mark.parametrize("model,baud", [("embsys_wm", 9600), ("essae_jx500", 115200)])
+def test_worker_reconnects_after_unplugging_at_a_new_port(model, baud):
+    settings = {"scale": {"model": model, "port": "COM11", "baud_rate": baud}}
     service = ScaleService(lambda: settings)
     service.RECONNECT_INTERVAL_SECONDS = 0.001
     ports = [usb("COM11")]
@@ -108,11 +115,68 @@ def test_worker_reconnects_after_unplugging_at_a_new_port():
         service._stop.set()
         return b""
     second.read.side_effect = finish
-    with patch("serial.tools.list_ports.comports", side_effect=lambda: list(ports)), patch("serial.Serial", side_effect=[first, second]) as open_serial:
+    with patch("backend.app.hardware.scale.os", SimpleNamespace(name="nt")), \
+         patch("serial.tools.list_ports.comports", side_effect=lambda: list(ports)), \
+         patch("serial.Serial", side_effect=[first, second]) as open_serial:
         service._run()
-    assert [call.args[:2] for call in open_serial.call_args_list] == [("COM11", 115200), ("COM27", 115200)]
+    assert [call.args[:2] for call in open_serial.call_args_list] == [("COM11", baud), ("COM27", baud)]
     first.__exit__.assert_called_once()
     assert not service.snapshot()["connected"]
+
+
+def test_embsys_remembers_device_only_after_valid_reading():
+    settings = {"scale": {"model": "embsys_wm", "port": "COM12"}}
+    remember = Mock()
+    service = ScaleService(lambda: settings, remember)
+    service._failed_ports.add("COM12")
+    connection = Mock(in_waiting=100)
+
+    def read(_):
+        if connection.read.call_count == 1:
+            return b"invalid data\r\n"
+        if connection.read.call_count == 2:
+            remember.assert_not_called()
+            return b"12.345 g\r\n"
+        raise serial.SerialException("unplugged")
+
+    connection.read.side_effect = read
+    device = usb("COM27")
+    with patch("backend.app.hardware.scale.os", SimpleNamespace(name="nt")), \
+         patch("serial.tools.list_ports.comports", return_value=[device]), \
+         pytest.raises(serial.SerialException, match="unplugged"):
+        service._read_connection(connection, "COM27")
+    remember.assert_called_once_with("embsys_wm", "COM27", ScaleService._port_identity(device))
+    assert not service._failed_ports
+
+
+@pytest.mark.parametrize("failure", ["busy", "silent", "invalid"])
+def test_embsys_worker_skips_unusable_saved_port(failure):
+    service = ScaleService(lambda: {"scale": {
+        "model": "embsys_wm", "port": "COM12", "baud_rate": 9600,
+    }})
+    service.RECONNECT_INTERVAL_SECONDS = 0.001
+    first, second = Mock(), Mock()
+    for connection in (first, second):
+        connection.__enter__ = Mock(return_value=connection)
+        connection.__exit__ = Mock(return_value=False)
+        connection.in_waiting = 100
+    first.read.return_value = b"wrong device\r\n" if failure == "invalid" else b""
+
+    def finish(_):
+        service._stop.set()
+        return b""
+
+    second.read.side_effect = finish
+    # Advance time on each read so silent/invalid devices reach the timeout.
+    ticks = iter(range(100))
+    with patch("backend.app.hardware.scale.os", SimpleNamespace(name="nt")), \
+         patch("backend.app.hardware.scale.time.monotonic", side_effect=lambda: next(ticks)), \
+         patch("serial.tools.list_ports.comports", return_value=[usb("COM12"), usb("COM27")]), \
+         patch("serial.Serial", side_effect=[serial.SerialException("busy") if failure == "busy" else first, second]) as opened:
+        service._run()
+    assert [call.args[:2] for call in opened.call_args_list] == [("COM12", 9600), ("COM27", 9600)]
+    if failure != "busy":
+        first.__exit__.assert_called_once()
 
 
 def test_apply_switches_running_reader_to_selected_model_and_baud():

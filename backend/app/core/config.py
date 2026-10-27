@@ -50,7 +50,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     },
     "scale": {
         "model": "embsys_wm",
-        "port": "COM12" if os.name == "nt" else "",
+        "port": "",
         "baud_rate": 9600,
     },
     "rois": {
@@ -113,7 +113,7 @@ def hardware_defaults(platform: str) -> dict[str, Any]:
             "gain": 0, "backlight_compensation": 0, "white_balance_automatic": 1,
         },
     })
-    return {"camera": camera, "scale": {"model": "embsys_wm", "port": "COM12" if windows else "", "baud_rate": 9600}}
+    return {"camera": camera, "scale": {"model": "embsys_wm", "port": "", "baud_rate": 9600}}
 
 
 class SettingsStore:
@@ -182,8 +182,7 @@ class SettingsStore:
             previous_model = current.get("model", "embsys_wm")
             devices[previous_model] = {key: current.get(key, "") for key in ("port", "baud_rate", "usb_identity")}
             selected = devices.get(model, {
-                "port": "COM11" if self.platform == "windows" and model == "essae_jx500" else
-                        "COM12" if self.platform == "windows" else "",
+                "port": "COM11" if self.platform == "windows" and model == "essae_jx500" else "",
                 "usb_identity": "",
             })
             return self.update({"scale": {

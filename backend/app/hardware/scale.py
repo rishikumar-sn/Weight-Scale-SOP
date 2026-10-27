@@ -105,10 +105,34 @@ class ScaleService:
     def _select_port(self) -> str:
         if self._settings_provider()["scale"].get("model") == "essae_jx500":
             return self._select_essae_port()
-        configured = str(self._settings_provider()["scale"].get("port") or "").strip()
+        settings = self._settings_provider()["scale"]
+        configured = str(settings.get("port") or "").strip()
+        if os.name == "nt":
+            identity = settings.get("usb_identity", "")
+            ports = [p for p in serial.tools.list_ports.comports()
+                     if getattr(p, "vid", None) is not None
+                     or p.device.upper().startswith("COM")]
+            # COM numbers belong to this PC, not the scale. A saved number is
+            # only a preference; confirm candidates using valid weight frames.
+            ports.sort(key=lambda p: (
+                not bool(identity and self._port_identity(p) == identity),
+                p.device.casefold() != configured.casefold(),
+                not ("CH340" in (getattr(p, "description", "") or "").upper()
+                     or (getattr(p, "vid", None), getattr(p, "pid", None)) == (0x1A86, 0x7523)
+                     or "1A86:7523" in (getattr(p, "hwid", "") or "").upper()),
+                getattr(p, "vid", None) is None,
+                p.device,
+            ))
+            available = [p for p in ports if p.device not in self._failed_ports]
+            if not available:
+                self._failed_ports.clear()
+                available = ports
+            if not available:
+                raise RuntimeError("USB scale not detected; waiting for connection")
+            return available[0].device
         # Persistent aliases follow this adapter across ttyUSB number changes.
         # Never switch an explicitly selected device to an unrelated USB port.
-        if configured.startswith("/dev/") or (os.name == "nt" and configured):
+        if configured.startswith("/dev/"):
             return configured
         ports = list(serial.tools.list_ports.comports())
         if configured and any(item.device.casefold() == configured.casefold() for item in ports):
@@ -190,7 +214,7 @@ class ScaleService:
                         self._raw = raw.decode("ascii", errors="ignore").strip()
                         self._status = "Scale connected"
                         self._error = ""
-                    if model == "essae_jx500" and not remembered:
+                    if (model == "essae_jx500" or os.name == "nt") and not remembered:
                         remembered = True
                         self._failed_ports.clear()
                         if self._remember_device:
@@ -235,7 +259,7 @@ class ScaleService:
                             self._error = ""
                         self._read_connection(connection, port)
                 except Exception as exc:  # noqa: BLE001
-                    if port and self._model == "essae_jx500":
+                    if port and (self._model == "essae_jx500" or os.name == "nt"):
                         self._failed_ports.add(port)
                     self._invalidate("Scale reconnecting", str(exc))
                     self._reconnect.wait(self.RECONNECT_INTERVAL_SECONDS)
