@@ -347,8 +347,82 @@ def _non_gold_color_components(
         if area > maximum_area:
             # Touching beads can connect a whole strand. Split its coherent
             # chromatic faces before applying the per-stone area guard.
-            parts = _watershed_split(image_bgr, mask, 80, max_parts=128)
-            for part in parts:
+            # Warm, non-gold shadows can bridge adjacent beads and inflate
+            # the global distance peak. Remove those bridges before finding
+            # bead centers; keep this stricter path local to oversized strands.
+            original_parts = _watershed_split(image_bgr, mask, 80, max_parts=128)
+            chromatic_mask = np.where(
+                (mask > 0) & non_metal_color, 255, 0
+            ).astype(np.uint8)
+            face_count, face_labels, face_stats, _ = cv2.connectedComponentsWithStats(
+                chromatic_mask, 8
+            )
+            parts = []
+            for face_label in range(1, face_count):
+                if int(face_stats[face_label, cv2.CC_STAT_AREA]) < 80:
+                    continue
+                face = np.where(face_labels == face_label, 255, 0).astype(np.uint8)
+                split_faces = _watershed_split(image_bgr, face, 80, max_parts=128)
+                if len(split_faces) > 1:
+                    # Watershed can assign a narrow stone rim to background.
+                    # Recover at most two pixels, strictly inside the strong
+                    # non-metal face, using the nearest split's ownership.
+                    split_union = np.zeros_like(face)
+                    for split_face in split_faces:
+                        split_union |= split_face
+                    distance, owners = cv2.distanceTransformWithLabels(
+                        cv2.bitwise_not(split_union), cv2.DIST_L2, 5,
+                        labelType=cv2.DIST_LABEL_CCOMP,
+                    )
+                    owner_to_face = np.zeros(int(owners.max()) + 1, np.int32)
+                    for index, split_face in enumerate(split_faces, 1):
+                        owner_to_face[np.unique(owners[split_face > 0])] = index
+                    nearest = owner_to_face[owners]
+                    fillable = (face > 0) & (distance <= 2.0)
+                    split_faces = [
+                        cv2.bitwise_or(split_face, np.where(
+                            fillable & (nearest == index), 255, 0
+                        ).astype(np.uint8))
+                        for index, split_face in enumerate(split_faces, 1)
+                    ]
+                split_union = np.zeros_like(face)
+                for split_face in split_faces:
+                    split_union |= split_face
+                # A background watershed basin can also swallow a whole dim
+                # bead. Remove thin leftover rims before proposing those
+                # remaining compact cores; normal face guards still apply.
+                leftover = cv2.bitwise_and(face, cv2.bitwise_not(split_union))
+                leftover = cv2.morphologyEx(
+                    leftover, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8)
+                )
+                core_count, core_labels, core_stats, _ = cv2.connectedComponentsWithStats(leftover, 8)
+                for core_label in range(1, core_count):
+                    if int(core_stats[core_label, cv2.CC_STAT_AREA]) >= 80:
+                        core = np.where(core_labels == core_label, 255, 0).astype(np.uint8)
+                        split_faces.extend(_watershed_split(image_bgr, core, 80, max_parts=128))
+                # Opening the strong mask supplies independent compact cores
+                # where a watershed background basin swallowed an entire bead.
+                opened = cv2.morphologyEx(
+                    face, cv2.MORPH_OPEN,
+                    cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)),
+                )
+                opened_count, opened_labels, opened_stats, _ = cv2.connectedComponentsWithStats(opened, 8)
+                covered = np.zeros_like(face)
+                for split_face in split_faces:
+                    covered |= split_face
+                for opened_label in range(1, opened_count):
+                    if int(opened_stats[opened_label, cv2.CC_STAT_AREA]) < 80:
+                        continue
+                    core = np.where(opened_labels == opened_label, 255, 0).astype(np.uint8)
+                    for core_part in _watershed_split(image_bgr, core, 80, max_parts=128):
+                        core_area = max(1, cv2.countNonZero(core_part))
+                        if cv2.countNonZero(cv2.bitwise_and(core_part, covered)) / core_area < 0.90:
+                            split_faces.append(core_part)
+                parts.extend(split_faces)
+            proposals = [(part, False) for part in original_parts] if len(original_parts) > 1 else []
+            proposals.extend((part, True) for part in parts)
+            legacy_union = np.zeros_like(mask)
+            for part, recovered_faces in proposals:
                 part_area = int(cv2.countNonZero(part))
                 if not 80 <= part_area <= maximum_area:
                     continue
@@ -359,8 +433,15 @@ def _non_gold_color_components(
                         or metrics["aspect_ratio"] > 3.5
                         or metrics["compactness"] < 0.18):
                     continue
+                if recovered_faces:
+                    overlap = cv2.countNonZero(cv2.bitwise_and(part, legacy_union))
+                    if overlap / float(part_area) >= 0.90:
+                        continue
+                else:
+                    legacy_union |= part
                 components.append({
                     "mask": part, "confidence": 0.86,
+                    "source_methods": ["non_gold_chromatic_face"] if recovered_faces else [],
                     "median_saturation": round(float(np.median(saturation[valid])), 1),
                     "median_value": round(float(np.median(value[valid])), 1),
                 })
@@ -523,6 +604,11 @@ def generate_stone_candidates(
         area = max(1, int(cv2.countNonZero(mask)))
         duplicate: dict[str, Any] | None = None
         for candidate in candidates:
+            # Supplemental faces must not alter existing seeds or their order.
+            if "non_gold_chromatic_face" in residual.get("source_methods", []):
+                break
+            if "non_gold_chromatic_face" in candidate["source_methods"]:
+                continue
             overlap = cv2.countNonZero(cv2.bitwise_and(mask, candidate["seed_mask"]))
             if overlap / float(min(area, max(1, candidate["seed_area_px"]))) >= 0.25:
                 duplicate = candidate
@@ -537,7 +623,8 @@ def generate_stone_candidates(
             duplicate["centroid"] = _centroid(merged_seed)
             duplicate["seed_area_px"] = int(cv2.countNonZero(merged_seed))
             duplicate["source_methods"] = sorted(
-                set(duplicate["source_methods"] + ["non_gold_hsv_residual"])
+                set(duplicate["source_methods"] + ["non_gold_hsv_residual"]
+                    + residual.get("source_methods", []))
             )
             duplicate["confidence"] = max(
                 float(duplicate["confidence"]), float(residual["confidence"])
@@ -550,7 +637,7 @@ def generate_stone_candidates(
                 "proposal_mask": mask.copy(),
                 "bbox": _bbox(mask),
                 "centroid": _centroid(mask),
-                "source_methods": ["non_gold_hsv_residual"],
+                "source_methods": ["non_gold_hsv_residual"] + residual.get("source_methods", []),
                 "initial_color_votes": {},
                 "seed_area_px": area,
                 "confidence": residual["confidence"],
@@ -570,6 +657,8 @@ def generate_stone_candidates(
         area = max(1, int(cv2.countNonZero(mask)))
         duplicate: dict[str, Any] | None = None
         for candidate in candidates:
+            if "non_gold_chromatic_face" in candidate["source_methods"]:
+                continue
             overlap = cv2.countNonZero(cv2.bitwise_and(mask, candidate["seed_mask"]))
             if overlap / float(min(area, max(1, candidate["seed_area_px"]))) >= 0.30:
                 duplicate = candidate
@@ -610,6 +699,8 @@ def generate_stone_candidates(
         area = max(1, int(cv2.countNonZero(mask)))
         duplicate: dict[str, Any] | None = None
         for candidate in candidates:
+            if "non_gold_chromatic_face" in candidate["source_methods"]:
+                continue
             overlap = cv2.countNonZero(cv2.bitwise_and(mask, candidate["seed_mask"]))
             if overlap / float(min(area, max(1, candidate["seed_area_px"]))) >= 0.45:
                 duplicate = candidate
@@ -655,6 +746,7 @@ def generate_stone_candidates(
             if any(
                 cv2.countNonZero(cv2.bitwise_and(seed, item["seed_mask"])) > 0
                 for item in candidates
+                if "non_gold_chromatic_face" not in item["source_methods"]
             ):
                 continue
             candidates.append(
@@ -675,8 +767,15 @@ def generate_stone_candidates(
             )
 
     candidates.sort(
-        key=lambda item: (-float(item["confidence"]), -int(item["seed_area_px"]))
+        key=lambda item: (
+            "non_gold_chromatic_face" in item["source_methods"],
+            -float(item["confidence"]), -int(item["seed_area_px"]),
+        )
     )
+    supplemental = [c for c in candidates if "non_gold_chromatic_face" in c["source_methods"]]
+    candidates = [c for c in candidates if "non_gold_chromatic_face" not in c["source_methods"]]
+    for candidate in supplemental:
+        candidate["supplemental_face"] = True
     limit = max(1, int(max_candidates))
     primary = candidates[:limit]
     # Confidence sorting can fill the budget with tiny, saturated metal
@@ -684,7 +783,7 @@ def generate_stone_candidates(
     # and ordering intact, but rescue independently supported complete faces.
     # These candidates cannot compete with primary seeds during refinement.
     overflow = []
-    overflow_pool = candidates[limit:] if recover_overflow else []
+    overflow_pool = candidates[limit:] + supplemental if recover_overflow else []
     overflow_lab = None
     overflow_hsv = None
     overflow_chromatic = None
@@ -745,7 +844,15 @@ def generate_stone_candidates(
                 and shape_metrics["aspect_ratio"] <= 2.5
                 and shape_metrics["solidity"] >= 0.45
                 and shape_metrics["compactness"] >= 0.12
-                and _metal_surround_ratio(candidate["seed_mask"], gold_mask) >= 0.35
+                and (
+                    _metal_surround_ratio(candidate["seed_mask"], gold_mask) >= 0.35
+                    or (
+                        "non_gold_chromatic_face" in sources
+                        and float(np.mean(overflow_chromatic[valid])) >= 0.80
+                        and shape_metrics["solidity"] >= 0.55
+                        and shape_metrics["compactness"] >= 0.18
+                    )
+                )
             )
             if supported_color:
                 # Preserve the independent evidence through final neutral
@@ -1183,6 +1290,7 @@ def build_final_stone_instances(
             index
             for index, other in enumerate(candidates)
             if index != candidate_index
+            and not (other.get("supplemental_face") and not candidate.get("supplemental_face"))
             and not (
                 other.get("overflow_recovery")
                 and not candidate.get("overflow_recovery")
@@ -1221,7 +1329,9 @@ def build_final_stone_instances(
             bool(refined.get("accepted", True))
             and not reflection_only
             and not metal_texture_only
-            and overlap < 0.62
+            # A verified supplemental face may mostly overlap an old partial
+            # mask. Keep only its uncovered pixels below, preserving that mask.
+            and (overlap < 0.62 or bool(candidate.get("supplemental_face")))
         )
         if accepted and (overlap > 0 or candidate.get("overflow_recovery")):
             protected = occupied

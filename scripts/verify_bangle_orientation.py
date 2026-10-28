@@ -43,7 +43,7 @@ def main():
     for pose in ("standing", "unknown"):
         assert route_for_label("Bangle", bangle_orientation=pose)["stones"]
         assert not route_for_label("Bangle", bangle_orientation=pose)["dimension"]
-    assert route_for_label("Finger Ring")["key"] == "capture_only"
+    assert route_for_label("Finger Ring")["dimension"]
     assert route_for_label("Chain Necklace")["beads"]
 
     def load(session):

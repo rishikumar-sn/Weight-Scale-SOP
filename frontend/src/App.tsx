@@ -563,7 +563,7 @@ export default function App() {
   async function recapture() {
     if (live.scale?.model === "accet_cg1003l") {
       setError("");
-      setMessage("Press the ACCET scale button in grams (g) to recapture. Your corrections will be saved with the next capture.");
+      setMessage("Press the ACZET scale button in grams (g) to recapture. Your corrections will be saved with the next capture.");
       return;
     }
     if (!checkCaptureUnit()) return;
@@ -793,10 +793,10 @@ export default function App() {
                   <select id="scale-model" value={scaleModel} disabled={settingsSaving} onChange={event => { setScaleModel(event.target.value); setSettingsNotice(""); }}>
                     <option value="embsys_wm">EMBSYS WM</option>
                     <option value="essae_jx500">ESSAE JX500</option>
-                    <option value="accet_cg1003l">ACCET CG1003L</option>
+                    <option value="accet_cg1003l">ACZET CG1003L</option>
                   </select>
                   {scaleModel === "accet_cg1003l"
-                    ? <p>ACCET CG1003L uses 9600 baud and detects its USB port when you press the scale button. After applying, close settings and press the scale button to capture the selected jewellery or tare process. Keep the AprilTag visible for every capture. Capture works only in grams (g). For any other unit, change the weight scale mode to grams before pressing the scale button.</p>
+                    ? <p>ACZET CG1003L uses 9600 baud and detects its USB port when you press the scale button. After applying, close settings and press the scale button to capture the selected jewellery or tare process. Keep the AprilTag visible for jewellery capture. Tare capture does not require an AprilTag. Capture works only in grams (g). For any other unit, change the weight scale mode to grams before pressing the scale button.</p>
                     : <p>ESSAE JX500 finds its USB port automatically, including when the port number changes. Its decoded USB output must be connected.</p>}
                   <div className="filterStatus" role="status"><strong>{live.scale?.status || "Waiting for scale"}</strong><span>{live.scale?.port || "Searching for USB scale"}</span>{live.scale?.error && <span>{live.scale.error}</span>}</div>
                   <button className="primary" disabled={settingsSaving || busy || stage === "processing"} onClick={saveScale}>{settingsSaving ? "Applying..." : "Apply scale"}</button>
@@ -1010,15 +1010,27 @@ export default function App() {
                           {item.dimensions?.applicable === false && <div className="wide"><span>Dimensions unavailable</span><strong>{item.dimensions.reason}</strong></div>}
                           {item.dimensions?.outer_diameter_mm != null && <div><span>Outer diameter</span><strong>{Number(item.dimensions.outer_diameter_mm).toFixed(2)} mm</strong></div>}
                           {item.dimensions?.inner_diameter_mm != null && <div><span>Inner diameter</span><strong>{Number(item.dimensions.inner_diameter_mm).toFixed(2)} mm</strong></div>}
+                          {item.dimensions?.ring_size && <>
+                            <div><span>Indian ring size (approx.)</span><strong>{item.dimensions.ring_size.indian || item.dimensions.ring_size.display}</strong></div>
+                            <div><span>Inner circumference (estimated)</span><strong>{Number(item.dimensions.inner_circumference_mm).toFixed(2)} mm</strong></div>
+                            <div><span>Ring opening</span><strong>{item.dimensions.opening_description || "Visible; ellipse fitted"}</strong></div>
+                            <div><span>Opening axes</span><strong>{Number(item.dimensions.inner_major_axis_mm).toFixed(2)} × {Number(item.dimensions.inner_minor_axis_mm).toFixed(2)} mm</strong></div>
+                            <div className="wide"><span>Measurement basis</span><strong>{item.dimensions.measurement_note || "Ellipse long axis; assumes a circular band"}. Size uses the nearest listed inner diameter.</strong></div>
+                            {item.dimensions.is_open_ring_estimate && <div className="wide"><span>Approximation</span><strong>{item.dimensions.estimate_note || "Current opening only; adjustable ring fit can change"}</strong></div>}
+                          </>}
+                          {item.dimensions?.bangle_size && <div><span>Standard bangle size (approx.)</span><strong>{item.dimensions.bangle_size.label || item.dimensions.bangle_size.display}</strong></div>}
+                          {item.dimensions?.bangle_size?.fit && <div><span>Common fit</span><strong>{item.dimensions.bangle_size.fit}</strong></div>}
+                          {item.dimensions?.bangle_size?.label && <div className="wide"><span>Size basis</span><strong>Nearest listed size by inner diameter ({item.dimensions.bangle_size.reference_diameter_mm} mm reference)</strong></div>}
                           {item.beads && <div><span>Bead analysis</span><strong>{item.beads.beads_detected ? "Beads detected" : "Beads not detected"}</strong></div>}
                           {item.beads && <div><span>Bead count</span><strong>{item.beads.count ?? item.beads.detections?.length ?? "Unavailable"}</strong></div>}
                           {item.beads?.summary && <div className="wide"><span>Bead insights</span><strong>{item.beads.summary}</strong></div>}
+                          {item.stones?.thread && <div><span>Thread analysis</span><strong>{item.stones.thread.status}</strong></div>}
                           {item.stones?.stone_area_mm2 != null && <div><span>Detected stone area</span><strong>{Number(item.stones.stone_area_mm2).toFixed(2)} mm²</strong></div>}
                           {item.stones && <div className={`wide riskTag risk${item.stones.risk_level || "NONE"}`}><span>Stone analysis</span><strong>{({ HIGH: "High stones region", MEDIUM: "Medium stones", LOW: "Low stones", NONE: "No stones" } as Record<string, string>)[item.stones.risk_level || "NONE"] || "No stones"}</strong></div>}
                         </div>
                         {(item.errors || []).map((warning: any) => <p className="itemWarning" key={warning.stage}>{warning.stage}: {warning.message}</p>)}
                         <div className="resultGallery">
-                          <ResultImage src={itemMedia.dimensions} alt={`Jewel ${item.index} size result`} label={item.dimensions?.applicable === false ? "Ring image — dimensions unavailable" : "Dimension analysis"} />
+                          <ResultImage src={itemMedia.dimensions} alt={`Jewel ${item.index} size result`} label={item.dimensions?.applicable === false ? "Dimensions unavailable" : "Dimension analysis"} />
                           <ResultImage src={itemMedia.beads} alt={`Jewel ${item.index} bead result`} label="Bead analysis" />
                           <ResultImage src={itemMedia.stones} alt={`Jewel ${item.index} stone result`} label="Stone analysis" />
                         </div>

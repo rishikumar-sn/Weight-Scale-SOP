@@ -57,11 +57,11 @@ def _fit_supported(points, seed, tolerance):
     return ellipse, float(keep.mean())
 
 
-def visible_ring_ellipses(img, scale=None):
-    """Return OD/ID ellipses only when a clean opening and two edges are visible.
+def visible_ring_ellipses(img, scale=None, *, allow_open=False, return_evidence=False):
+    """Fit observed edges; optionally seed an open band across its missing gap.
 
-    Thresholds propose openings; measurements are refined on the original gray
-    image. This avoids measuring threshold halos or concentric engraving lines.
+    Closing and convex envelopes only propose ellipses. All measurements and
+    angular-support checks use the original image, preserving real band gaps.
     """
     if img is None or img.size == 0:
         raise ValueError('Empty image supplied to finger-ring detection.')
@@ -71,13 +71,31 @@ def visible_ring_ellipses(img, scale=None):
     smooth = cv2.GaussianBlur(gray, (3, 3), .7)
     min_dim = min(gray.shape)
     min_radius = max(10., min_dim * .018) if scale is None else max(5., 2.5 / scale)
-    max_radius = min_dim * .24 if scale is None else min(min_dim * .3, 18 / scale)
+    max_radius = min_dim * .49 if scale is None else min(min_dim * .49, 18 / scale)
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     warm = cv2.inRange(hsv, (2, 35, 25), (48, 255, 255))
     masks = [warm]
     masks += [cv2.adaptiveThreshold(smooth, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
                                    cv2.THRESH_BINARY_INV, block, c)
               for block in (51, 101, 201) for c in (4, 10)]
+    if allow_open:
+        # These masks propose a closed opening only. Measurements below always
+        # sample the untouched gray image, never the artificially joined gap.
+        proposals = []
+        for mask in masks:
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            hull_proposal = mask.copy()
+            for contour in contours:
+                if cv2.contourArea(contour) < 80:
+                    continue
+                # Close the gap with the body's convex envelope to obtain a
+                # seed. The added hull pixels never become measurement points.
+                cv2.drawContours(hull_proposal, [cv2.convexHull(contour)], -1, 255, 2)
+            proposals.append(hull_proposal)
+        masks = proposals + [cv2.morphologyEx(mask, cv2.MORPH_CLOSE,
+                  cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
+                    (max(5, round(min_dim * fraction)) | 1,) * 2))
+                 for mask in masks for fraction in (.08, .12, .18, .24)]
     texture = gray.astype(float) - cv2.GaussianBlur(gray, (0, 0), 3).astype(float)
     candidates = []
     seeds = []
@@ -107,7 +125,13 @@ def visible_ring_ellipses(img, scale=None):
             cv2.ellipse(interior, small, 255, -1)
             values = gray[interior > 0]
             outside_x, outside_y = _points(seed, [max(da, db) * .4])
-            outside = cv2.remap(gray, outside_x, outside_y, cv2.INTER_LINEAR)
+            outside_valid = ((outside_x >= 0) & (outside_x < gray.shape[1] - 1)
+                             & (outside_y >= 0) & (outside_y < gray.shape[0] - 1))
+            outside = cv2.remap(gray, outside_x, outside_y, cv2.INTER_LINEAR)[outside_valid]
+            if outside.size < 20:
+                # Tightly cropped exports may put the normal samples outside
+                # the image; use the actual border pixels as background evidence.
+                outside = np.concatenate((gray[0], gray[-1], gray[:, 0], gray[:, -1]))
             if values.size == 0 or np.std(texture[interior > 0]) > 5 or abs(np.median(values) - np.median(outside)) > 30:
                 continue
             if np.mean(warm[interior > 0] > 0) > .15:
@@ -157,7 +181,7 @@ def visible_ring_ellipses(img, scale=None):
             if fitted is None:
                 continue
             outer, outer_support = fitted
-            if min(np.array(outer[1]) - inner[1]) < 2 or np.linalg.norm(np.array(outer[0]) - inner[0]) > radius * .12:
+            if min(np.array(outer[1]) - inner[1]) < 2 or np.linalg.norm(np.array(outer[0]) - inner[0]) > radius * (.18 if allow_open else .12):
                 continue
             # Different ellipse orientations can cross despite ordered axis
             # lengths. The complete opening must remain inside the outer band.
@@ -176,8 +200,50 @@ def visible_ring_ellipses(img, scale=None):
             score = (inner_support + outer_support + valid.mean()
                      + min(area / (np.pi * max_radius ** 2), 1.)
                      - center_distance / max(radius * .1, 1.))
-            candidates.append((score, outer, inner))
+            evidence = dict(is_open_ring_estimate=False,
+                            opening_description="Visible; ellipse fitted",
+                            measurement_note="Ellipse long axis; assumes a circular band")
+            if allow_open:
+                # Confirm support on the FINAL ellipse, in all angular sectors.
+                # A large missing arc, obstruction or almost edge-on band must
+                # not be converted into an apparently measured complete ring.
+                offsets = np.arange(-2., 2.01, .5)
+                xs, ys = _points(inner, offsets)
+                profile = cv2.remap(smooth, xs, ys, cv2.INTER_LINEAR).astype(float)
+                support = -np.min(np.gradient(profile, .5, axis=0), axis=0) > 3
+                coverage = float(support.mean())
+                doubled = np.tile(~support, 2)
+                runs = np.diff(np.flatnonzero(np.diff(np.r_[False, doubled, False])))
+                gap = min(180, int(runs[::2].max(initial=0))) * 2
+                # At least three quarters of the inner outline must be visible.
+                # Require a genuine gap, not a fully visible band rejected for
+                # another reason by the ordinary detector.
+                if coverage < .75 or not 8 <= gap <= 80 or outer_support < .75:
+                    continue
+                # No part of the inferred ellipse may leave the captured crop.
+                ex, ey = _points(inner, [0])
+                if (ex.min() < 1 or ey.min() < 1 or ex.max() >= img.shape[1]-1
+                        or ey.max() >= img.shape[0]-1):
+                    continue
+                evidence = dict(is_open_ring_estimate=True,
+                    opening_description="Open ring; missing arc estimated",
+                    measurement_note="Visible arc fitted; missing gap estimated",
+                    visible_arc_fraction=coverage, largest_missing_arc_degrees=gap,
+                    estimate_note="Current opening only; adjustable ring fit can change")
+            candidates.append((score, outer, inner, evidence))
     if not candidates:
-        raise RingDimensionsUnavailable('Finger-ring opening or both band boundaries are not clearly visible. Place the ring flat with its center hole clear.')
-    _, outer, inner = max(candidates, key=lambda item: item[0])
-    return outer, inner
+        message = ('Not enough consistent inner-band arc is visible for an approximate size. '
+                   'Place the ring flat with most of its band visible.' if allow_open else
+                   'Finger-ring opening or both band boundaries are not clearly visible. '
+                   'Place the ring flat with its center hole clear.')
+        raise RingDimensionsUnavailable(message)
+    _, outer, inner, evidence = max(candidates, key=lambda item: item[0])
+    return (outer, inner, evidence) if return_evidence else (outer, inner)
+
+
+def measure_ring_ellipses(img, scale=None):
+    """Prefer directly visible boundaries; approximate only supported open bands."""
+    try:
+        return visible_ring_ellipses(img, scale, return_evidence=True)
+    except RingDimensionsUnavailable:
+        return visible_ring_ellipses(img, scale, allow_open=True, return_evidence=True)

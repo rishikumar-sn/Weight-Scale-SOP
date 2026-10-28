@@ -43,12 +43,13 @@ def main():
         if model not in segmenters:
             segmenters[model] = TestbedSegmenter(
                 TESTBED_MODEL_PATHS[model], inset_px=12 if model == "essae_jx500" else 2,
-                outer_inset_ratio=0.035 if model == "essae_jx500" else 0.0,
+                outer_inset_ratio=0.035 if model in {"essae_jx500", "accet_cg1003l"} else 0.0,
+                exclude_circle=model == "essae_jx500",
             )
         raw = cv2.imread(str(manifest.parent / "capture/original.png"))
         saved_mask = cv2.imread(str(manifest.parent / "capture/testbed_source_mask.png"), 0)
         # Re-run the selected scale's testbed model, including its circle class.
-        testbed = segmenters[model].segment(raw)
+        testbed = segmenters[model].segment(raw, apriltag=state.get("calibration"))
         check = detector.detect(raw, testbed.source_mask)
         saved_check = detector.detect(raw, saved_mask)
         assert check["passed"] == saved_check["passed"], manifest.parent.name

@@ -298,6 +298,7 @@ def separate_jewellery_items(
     min_area_px: int | None = None,
     min_area_ratio: float = 0.00045,
     padding_px: int = 18,
+    valid_area_mask: np.ndarray | None = None,
 ) -> list[dict[str, Any]]:
     """Return spatially separated jewels from the shared Otsu foreground mask.
 
@@ -305,7 +306,8 @@ def separate_jewellery_items(
     prevents neighbouring jewels from influencing SigLIP or a downstream
     dimension/stone detector. Objects must be placed with a visible gap; two
     touching objects are intentionally treated as one instead of inventing an
-    unreliable split.
+    unreliable split. With a valid-area mask, tiny edge fragments can retain
+    ownership when foreground continuity proves the safety inset cut them off.
     """
     if image is None or image.size == 0:
         raise ValueError("A non-empty jewellery image is required")
@@ -326,6 +328,47 @@ def separate_jewellery_items(
         int(min_area_px or 0),
         int(round(binary.size * max(0.0, float(min_area_ratio)))),
     )
+    if valid_area_mask is not None:
+        if valid_area_mask.shape[:2] != binary.shape:
+            raise ValueError("The valid area mask must match the image dimensions")
+        # The 12px safety inset in build_jewellery_mask can cut a necklace's
+        # attached bead off at the platform edge. Use foreground continuity
+        # only within that erased band to recover component ownership. Never
+        # restore those pixels to the measurement/classification mask.
+        valid = (valid_area_mask > 0).astype(np.uint8)
+        inner = cv2.erode(valid, np.ones((25, 25), np.uint8),
+                          borderType=cv2.BORDER_CONSTANT, borderValue=0)
+        band = (valid > 0) & (inner == 0)
+        continuity = binary | ((_threshold(image, False) > 0) & band).astype(np.uint8)
+        _, continuity_labels = cv2.connectedComponents(continuity, connectivity=8)
+        groups: dict[int, list[int]] = {}
+        for index in range(1, count):
+            if stats[index, cv2.CC_STAT_AREA] >= minimum:
+                x, y, w, h = stats[index, :4]
+                local_y, local_x = np.argwhere(labels[y:y + h, x:x + w] == index)[0]
+                y, x = y + local_y, x + local_x
+                groups.setdefault(int(continuity_labels[y, x]), []).append(index)
+        near_edge = cv2.dilate(band.astype(np.uint8), np.ones((25, 25), np.uint8))
+        for members in groups.values():
+            # Ambiguous connections (e.g. several jewels along a tray rim)
+            # retain their original separation. Only a tiny edge fragment
+            # connected to one much larger object qualifies.
+            if len(members) != 2:
+                continue
+            small, large = sorted(members, key=lambda i: stats[i, cv2.CC_STAT_AREA])
+            area = int(stats[small, cv2.CC_STAT_AREA])
+            if area > minimum * 2 or area * 100 > stats[large, cv2.CC_STAT_AREA]:
+                continue
+            fragment = labels == small
+            if np.count_nonzero(fragment & (near_edge > 0)) < area * 0.5:
+                continue
+            labels[fragment] = large
+            x1 = min(stats[small, 0], stats[large, 0])
+            y1 = min(stats[small, 1], stats[large, 1])
+            x2 = max(stats[small, 0] + stats[small, 2], stats[large, 0] + stats[large, 2])
+            y2 = max(stats[small, 1] + stats[small, 3], stats[large, 1] + stats[large, 3])
+            stats[large] = (x1, y1, x2 - x1, y2 - y1, stats[large, 4] + area)
+            stats[small, cv2.CC_STAT_AREA] = 0
     items: list[dict[str, Any]] = []
     for component_index in range(1, count):
         area = int(stats[component_index, cv2.CC_STAT_AREA])

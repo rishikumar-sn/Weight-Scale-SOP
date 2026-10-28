@@ -22,8 +22,11 @@ from ..analysis.bangle_placement import check_bangle_placement, PLACEMENT_MESSAG
 from ..analysis.beads import analyze_bead_detections, onnx_image_size, prepare_onnx_input
 from ..analysis.vision import separate_jewellery_items
 from ..analysis.foreign_objects import ForeignObjectDetector
+from ..analysis.thread_segmentation import ThreadSegmenter, project_thread_mask
 from ..core.config import PROJECT_ROOT, FOREIGN_OBJECT_MODEL_PATH
-from ..domain.workflow import label_key, route_for_label
+from ..domain.bangle_sizes import bangle_size
+from ..domain.ring_sizes import ring_size
+from ..domain.workflow import BEAD_LABELS, label_key, route_for_label
 from ..domain.weights import (
     stone_weight_fields,
     weight_summary,
@@ -43,6 +46,7 @@ from Classification.jewelry_classifier import (  # noqa: E402
 )
 from Classification.siglip384_classifier import Siglip384Classifier  # noqa: E402
 from Dimension.bangle_detector import detect_bangle, gold_bangle_mask  # noqa: E402
+from Dimension.finger_ring_detector import RingDimensionsUnavailable  # noqa: E402
 import StoneDetection.jewel_gem_hsv_report as stone_detection  # noqa: E402
 
 
@@ -371,6 +375,7 @@ class AnalysisService:
         self._classifier: JewelryZeroShotClassifier | None = None
         self._beads: OnnxBeadDetector | None = None
         self._foreign_objects: ForeignObjectDetector | None = None
+        self._thread: ThreadSegmenter | None = None
         self._active_capture: str | None = None
 
     @staticmethod
@@ -388,6 +393,12 @@ class AnalysisService:
         self._get_classifier()
         self._get_beads()
         self._get_foreign_objects()
+
+    def _get_thread(self) -> ThreadSegmenter:
+        with self._model_lock:
+            if self._thread is None:
+                self._thread = ThreadSegmenter(PROJECT_ROOT / "models" / "segmentation" / "thread.onnx")
+            return self._thread
 
     def _get_classifier(self) -> JewelryZeroShotClassifier:
         with self._model_lock:
@@ -498,12 +509,15 @@ class AnalysisService:
         settings = (
             (state.get("settings_snapshot") or {}).get("analysis") or {}
         ).get("item_separation") or {}
+        valid_area_path = state["paths"].get("testbed_mask")
+        valid_area_mask = cv2.imread(valid_area_path, cv2.IMREAD_GRAYSCALE) if valid_area_path else None
         separated = separate_jewellery_items(
             image,
             mask,
             min_area_px=int(settings.get("min_area_px", 350)),
             min_area_ratio=float(settings.get("min_area_ratio", 0.00045)),
             padding_px=int(settings.get("padding_px", 18)),
+            valid_area_mask=valid_area_mask,
         )
         check = self._check_foreign_objects(state, separated)
         state["foreign_object_check"] = check
@@ -889,9 +903,14 @@ class AnalysisService:
     def _run_dimension(self, state: dict[str, Any], item: dict[str, Any] | None = None) -> dict[str, Any]:
         calibration = state.get("calibration") or {}
         paths = (item or {}).get("paths") or state["paths"]
-        label = str((item or {}).get("confirmed_label") or state["classification"]["confirmed_label"])
-        if label_key(label) in {"finger ring", "ring"}:
-            return {"applicable": False, "status": "skipped", "reason": "Analysis is disabled for finger rings."}
+        label = str((item or {}).get("confirmed_label") or (state.get("classification") or {}).get("confirmed_label") or "")
+        is_ring = label_key(label) in {"finger ring", "ring"}
+        if is_ring:
+            confirmation = item if item is not None else state.get("classification") or {}
+            if (confirmation.get("confirmed") is not True
+                    or label_key(confirmation.get("confirmed_label")) not in {"finger ring", "ring"}):
+                return {"applicable": False, "status": "skipped",
+                        "reason": "Confirm the jewellery category as Finger Ring before measuring."}
         if label_key(label) == "bangle":
             target = item if item is not None else {"paths": paths}
             self._route_for_item(target, label)
@@ -901,15 +920,36 @@ class AnalysisService:
                         "reason": orientation["reason"], "bangle_orientation": orientation}
         suffix = f"item_{int(item['index']):02d}" if item else "dimensions"
 
-        mm_per_pixel = _apriltag_scale_mm_per_pixel(calibration)
-        result = detect_bangle(
-            paths["working"],
-            scale=mm_per_pixel,
-            debug=False,
-            jewel_type=label,
-        )
         output = self.repository.session_dir(state["id"]) / "results" / "dimensions" / f"{suffix}.png"
         output.parent.mkdir(parents=True, exist_ok=True)
+
+        def unavailable_ring(reason: str, opening_visible: bool | None = None) -> dict[str, Any]:
+            from ..analysis.annotations import add_side_panel
+            image = cv2.imread(paths["working"])
+            if image is None:
+                raise FileNotFoundError(f"Could not load ring image: {paths['working']}")
+            image = add_side_panel(image, "DIMENSION ANALYSIS", [
+                ("RING MEASUREMENT", "Unavailable"), ("RETAKE GUIDANCE", reason),
+            ])
+            image = identify_result_image(image, jewel_reference(item))
+            cv2.imwrite(str(output), image)
+            return {"applicable": False, "status": "skipped", "opening_visible": opening_visible,
+                    "reason": reason, "image": str(output)}
+
+        try:
+            mm_per_pixel = _apriltag_scale_mm_per_pixel(calibration)
+        except RuntimeError as exc:
+            if not is_ring:
+                raise
+            return unavailable_ring(str(exc))
+        try:
+            result = detect_bangle(
+                paths["working"], scale=mm_per_pixel, debug=False, jewel_type=label,
+            )
+        except RingDimensionsUnavailable as exc:
+            if not is_ring:
+                raise
+            return unavailable_ring(str(exc), opening_visible=False)
         annotated = cv2.imread(str(result["annotated_path"]))
         if annotated is not None:
             annotated = identify_result_image(annotated, jewel_reference(item))
@@ -918,6 +958,22 @@ class AnalysisService:
             "applicable": True,
             "outer_diameter_mm": result.get("od_mm"),
             "inner_diameter_mm": result.get("id_mm"),
+            "bangle_size": bangle_size(result.get("id_mm")) if label_key(label) == "bangle" else None,
+            **({
+                "ring_size": ring_size(result.get("id_mm")),
+                "opening_visible": True,
+                "is_open_ring_estimate": result.get("is_open_ring_estimate", False),
+                "opening_description": result.get("opening_description", "Visible; ellipse fitted"),
+                "measurement_note": result.get("measurement_note", "Ellipse long axis; assumes a circular band"),
+                "estimate_note": result.get("estimate_note"),
+                "visible_arc_fraction": result.get("visible_arc_fraction"),
+                "largest_missing_arc_degrees": result.get("largest_missing_arc_degrees"),
+                "inner_circumference_mm": math.pi * result["id_mm"],
+                "inner_major_axis_mm": result["inner_major_axis_px"] * mm_per_pixel,
+                "inner_minor_axis_mm": result["inner_minor_axis_px"] * mm_per_pixel,
+                "inner_axis_ratio": result["inner_axis_ratio"],
+                "diameter_basis": result["diameter_basis"],
+            } if is_ring else {}),
             "thickness_mm": result.get("wall_thickness_mm"),
             "calibration_source": "AprilTag",
             "apriltag_id": calibration.get("id"),
@@ -995,6 +1051,23 @@ class AnalysisService:
         if image is None or mask is None:
             raise RuntimeError("Jewellery image or mask is unavailable")
         mask = (mask > 0).astype(np.uint8)
+        thread_result = None
+        thread_mask = None
+        if label_key(label) in BEAD_LABELS:
+            original = cv2.imread(state["paths"]["original"])
+            source_mask, thread_result = self._get_thread().detect(original)
+            origin = (state.get("rois") or {}).get("processing")
+            if not origin:
+                raise RuntimeError("Thread coordinate mapping is unavailable; capture again")
+            bbox = (item or {}).get("bbox") or {"x": 0, "y": 0}
+            thread_mask = project_thread_mask(source_mask, mask.shape,
+                int(origin["x"]) + int(bbox["x"]), int(origin["y"]) + int(bbox["y"]))
+            thread_mask = ((thread_mask > 0) & (mask > 0)).astype(np.uint8)
+            found = bool(np.any(thread_mask))
+            thread_result.update({"applicable": True, "found": found,
+                "status": "Thread is present" if found else "Thread is not present",
+                "excluded_pixels": int(np.count_nonzero(thread_mask)),
+                "exclusion": "segmented_pixels_only"})
         preset_candidates = stone_detection.build_candidates_from_component_mask(
             image,
             mask,
@@ -1034,6 +1107,7 @@ class AnalysisService:
             zoom_scale=1,
             preset_candidates=preset_candidates,
             external_mask=mask,
+            stone_exclusion_mask=thread_mask,
             color_correction=analysis_settings.get("color_correction"),
             background_calibration=analysis_settings.get("background_calibration"),
             analysis_normalization=analysis_settings.get("normalization"),
@@ -1048,6 +1122,8 @@ class AnalysisService:
             fastsam_lock=None,
         )
         report = analysis["report"]
+        if thread_result is not None:
+            report["thread"] = thread_result
         classification = state.get("classification") or {}
         classified_items = classification.get("items") or []
         jewel_count = int(classification.get("count") or len(classified_items) or 1)
@@ -1076,10 +1152,10 @@ class AnalysisService:
         if estimate_weight:
             stone_g = gallery_weights.get("stone_g")
             stone_metric = ("STONE WEIGHT (ESTIMATED)", f"{stone_g:.2f} g" if stone_g is not None else "Unavailable")
-        gallery = stone_detection.build_result_gallery(analysis["jewel_views"], summary_fields=[
-            ("RESULT", str(risk.get("status") or "No stones")),
-            stone_metric,
-        ], item_reference=jewel_reference(item), weights=gallery_weights)
+        summary_fields = [("RESULT", str(risk.get("status") or "No stones")), stone_metric]
+        if thread_result is not None:
+            summary_fields.append(("THREAD", thread_result["status"]))
+        gallery = stone_detection.build_result_gallery(analysis["jewel_views"], summary_fields=summary_fields, item_reference=jewel_reference(item), weights=gallery_weights)
         cv2.imwrite(str(gallery_path), gallery)
         report_path = self._save_json(
             output_dir / "result.json",
@@ -1098,6 +1174,8 @@ class AnalysisService:
             "image": str(gallery_path),
             "report": report_path,
         }
+        if thread_result is not None:
+            result["thread"] = thread_result
         if estimate_weight:
             result.update(stone_weight_fields(measurements, stones_found))
         return result

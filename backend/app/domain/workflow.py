@@ -28,8 +28,8 @@ def route_for_label(label: str, *, bangle_orientation: str | None = None) -> dic
     key = label_key(label)
     if key in {"finger ring", "ring"}:
         return {
-            "key": "capture_only",
-            "dimension": False,
+            "key": "dimension",
+            "dimension": True,
             "beads": False,
             "stones": False,
         }

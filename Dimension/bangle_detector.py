@@ -913,20 +913,22 @@ def _circle_edge_support(
 def finger_ring_circle_detection(
     img: np.ndarray,
     scale: Optional[float],
-) -> tuple[CircleInfo, CircleInfo, float]:
-    """Measure visible ring boundaries without forcing tilted bands into circles."""
+    *, with_evidence: bool = False,
+) -> tuple[CircleInfo, CircleInfo, float] | tuple[CircleInfo, CircleInfo, float, dict[str, Any]]:
+    """Fit visible boundaries or estimate a well-supported open ring arc."""
     if __package__:
-        from .finger_ring_detector import visible_ring_ellipses
+        from .finger_ring_detector import measure_ring_ellipses
     else:
-        from finger_ring_detector import visible_ring_ellipses
+        from finger_ring_detector import measure_ring_ellipses
 
-    outer_fit, inner_fit = visible_ring_ellipses(img, scale)
+    outer_fit, inner_fit, evidence = measure_ring_ellipses(img, scale)
     circles = [
-        CircleInfo(center=fit[0], radius=sum(fit[1]) / 4.0,
+        CircleInfo(center=fit[0], radius=max(fit[1]) / 2.0,
                    method="finger_ring_edge_ellipse", ellipse=fit)
         for fit in (outer_fit, inner_fit)
     ]
-    return circles[0], circles[1], 1.0
+    result = (circles[0], circles[1], 1.0)
+    return (*result, evidence) if with_evidence else result
 
 
 def detect_bangle(
@@ -941,10 +943,10 @@ def detect_bangle(
         raise FileNotFoundError(f"Could not load image: {image_path}")
 
     normalized_jewel_type = str(jewel_type or "").strip().lower()
-    is_finger_ring = "finger" in normalized_jewel_type and "ring" in normalized_jewel_type
+    is_finger_ring = normalized_jewel_type in {"finger ring", "ring"}
 
     if is_finger_ring:
-        outer, inner, zoom_factor = finger_ring_circle_detection(img, scale)
+        outer, inner, zoom_factor, evidence = finger_ring_circle_detection(img, scale, with_evidence=True)
         od_px = outer.diameter
         id_px = inner.diameter
         wall_px = (od_px - id_px) / 2.0
@@ -959,6 +961,12 @@ def detect_bangle(
             "used_fallback": False,
             "detection_mode": "finger_ring_edge_ellipse",
             "zoom_factor": float(zoom_factor),
+            "opening_visible": True,
+            **evidence,
+            "inner_axis_ratio": min(inner.ellipse[1]) / max(inner.ellipse[1]),
+            "diameter_basis": "ellipse_major_axis_assuming_circular_band",
+            "inner_major_axis_px": max(inner.ellipse[1]),
+            "inner_minor_axis_px": min(inner.ellipse[1]),
         }
         if scale is not None:
             result.update(
@@ -1100,7 +1108,16 @@ def draw_results(
     colors = ((150, 145, 0), (30, 120, 235))
     for circle, color in zip((outer, inner), colors):
         if circle.ellipse is not None:
-            cv2.ellipse(out, circle.ellipse, color, 1, cv2.LINE_AA)
+            if result.get("is_open_ring_estimate"):
+                # A dashed complete ellipse makes the inferred gap visible;
+                # camera pixels and measurement inputs are never painted in.
+                center, axes, angle = circle.ellipse
+                center = tuple(int(round(value)) for value in center)
+                axes = tuple(int(round(value / 2)) for value in axes)
+                for start in range(0, 360, 10):
+                    cv2.ellipse(out, center, axes, angle, start, start + 6, color, 1, cv2.LINE_AA)
+            else:
+                cv2.ellipse(out, circle.ellipse, color, 1, cv2.LINE_AA)
         else:
             cv2.circle(out, tuple(np.round(circle.center).astype(int)),
                        int(round(circle.radius)), color, 1, cv2.LINE_AA)
@@ -1133,10 +1150,29 @@ def draw_results(
     x, y = min(b[0] for b in bounds), min(b[1] for b in bounds)
     out = display_crop(out, dict(x=x, y=y, w=max(b[2] for b in bounds) - x,
                                  h=max(b[3] for b in bounds) - y), padding=.055)
-    out = add_side_panel(out, "DIMENSION ANALYSIS", [
+    fields = [
         ("OUTER DIAMETER (OD)", measurement("od")),
         ("INNER DIAMETER (ID)", measurement("id")),
-    ], field_colors={
+    ]
+    if result.get("detection_mode") == "bangle":
+        from backend.app.domain.bangle_sizes import bangle_size
+        size = bangle_size(result.get("id_mm"))
+        fields.append(("STANDARD BANGLE SIZE", size["display"]))
+        if size["fit"]:
+            fields.append(("COMMON FIT", size["fit"]))
+        if size["label"]:
+            fields.append(("SIZE BASIS", "Nearest listed inner diameter"))
+    if result.get("detection_mode") == "finger_ring_edge_ellipse":
+        from backend.app.domain.ring_sizes import ring_size
+        size = ring_size(result.get("id_mm"))
+        fields.append(("RING OPENING", result.get("opening_description", "Visible; ellipse fitted")))
+        fields.append(("INDIAN RING SIZE (APPROX.)", size["display"]))
+        if result.get("id_mm") is not None:
+            fields.append(("INNER CIRCUMFERENCE (EST.)", f"{math.pi * result['id_mm']:.2f} mm"))
+        fields.append(("MEASUREMENT BASIS", result.get("measurement_note", "Ellipse long axis; assumes circular band")))
+        if result.get("is_open_ring_estimate"):
+            fields.append(("ESTIMATE NOTE", "Dashed outline = estimated completion; current opening only"))
+    out = add_side_panel(out, "DIMENSION ANALYSIS", fields, field_colors={
         "OUTER DIAMETER (OD)": tuple(reversed(colors[0])),
         "INNER DIAMETER (ID)": tuple(reversed(colors[1])),
     })

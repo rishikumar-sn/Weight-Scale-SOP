@@ -38,8 +38,8 @@ or processing do not replace the current review. During confirmation, another
 button press recaptures directly and saves the previous review corrections.
 A new press can also capture again from rejection, failure, or completed results.
 
-The configured AprilTag must be detected in every captured image, including
-ACCET tare images. The ACCET uses `models/segmentation/essaetestbed.onnx` for its
+The configured AprilTag must be detected in every jewellery capture. Tare
+captures do not require an AprilTag on any scale. The ACCET uses `models/segmentation/essaetestbed.onnx` for its
 testbed, with the circular-hole class ignored. Other scales retain their existing
 segmentation rules. Signed readings retain their source unit. Capture is allowed only when the scale
 reports grams (`g`); kg, mg, ct, GSM, and other units are blocked without taking

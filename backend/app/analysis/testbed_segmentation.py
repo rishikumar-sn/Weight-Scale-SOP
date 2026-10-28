@@ -66,6 +66,12 @@ class TestbedSegmenter:
         # ForeignObjectDetector also reuses this decoder for its own class set.
         self.testbed_class_id = normalized.get("testbed", 0)
         self.circle_class_id = normalized.get("circle") if exclude_circle else None
+        # ACZET has a continuous tray: jewellery-shaped voids in the platform
+        # prediction are occlusions, not physical holes. Restore the interior.
+        # On fixtures with a circle class, restore first and subtract only the
+        # independently anchored physical hole below. Other decoders retain
+        # their existing mask behavior when circle exclusion is enabled.
+        self.fill_platform_holes = not exclude_circle or self.circle_class_id is not None
 
     def segment(self, image_bgr: np.ndarray, *, apriltag: dict[str, Any] | None = None) -> TestbedRoi:
         if image_bgr is None or image_bgr.ndim != 3 or image_bgr.shape[2] != 3:
@@ -81,13 +87,14 @@ class TestbedSegmenter:
         row, box, confidence = self._best_detection(prediction)
         coefficient_start = 4 + len(self.names)
         source_mask = self._decode_mask(row[coefficient_start:], prototypes, box, transform, image_bgr.shape[:2])
-        source_mask = self._clean_mask(source_mask, fill_holes=self.circle_class_id is not None)
+        source_mask = self._clean_mask(source_mask, fill_holes=self.fill_platform_holes)
         if self.circle_class_id is not None:
             circle_row, circle_box, hole_validation = self._anchored_circle(
                 prediction, prototypes, transform, image_bgr.shape[:2], apriltag
             )
             hole = self._decode_mask(circle_row[coefficient_start:], prototypes, circle_box,
                                      transform, image_bgr.shape[:2])
+            hole = self._single_hole_mask(hole)
             if not np.any(hole & source_mask):
                 raise RuntimeError("Detected circular hole does not overlap the testbed; recapture")
             # Fill missing hole pixels, then expand its boundary so its rim cannot
@@ -132,6 +139,7 @@ class TestbedSegmenter:
             cx, cy, width, height = row[:4]
             box = np.array([cx-width/2, cy-height/2, cx+width/2, cy+height/2], np.float32)
             mask = self._decode_mask(row[4 + len(self.names):], prototypes, box, transform, source_shape)
+            mask = self._single_hole_mask(mask)
             if not np.any(mask):
                 continue
             x, y, w, h = cv2.boundingRect(mask)
@@ -147,6 +155,18 @@ class TestbedSegmenter:
         return row, box, {"anchor": "apriltag", "confidence": -negative_score,
                           "centre_in_tag_widths": centre.tolist(),
                           "bbox": dict(zip(("x", "y", "w", "h"), bounds))}
+
+    @staticmethod
+    def _single_hole_mask(mask: np.ndarray) -> np.ndarray:
+        """One physical fixture hole, never several disconnected circle blobs."""
+        count, labels, stats, _ = cv2.connectedComponentsWithStats((mask > 0).astype(np.uint8), 8)
+        if count <= 1:
+            return np.zeros_like(mask)
+        largest = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+        hole = (labels == largest).astype(np.uint8)
+        contours, _ = cv2.findContours(hole, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cv2.drawContours(hole, contours, -1, 1, cv2.FILLED)
+        return hole
 
     def _preprocess(self, image_bgr: np.ndarray) -> tuple[np.ndarray, dict[str, Any]]:
         height, width = image_bgr.shape[:2]

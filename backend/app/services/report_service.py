@@ -4,6 +4,7 @@ import io
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from xml.sax.saxutils import escape
 
 from PIL import Image as PillowImage, ImageDraw, ImageFont, ImageOps
 
@@ -16,6 +17,9 @@ from reportlab.platypus import Image, PageBreak, Paragraph, SimpleDocTemplate, S
 
 from ..core.config import PROJECT_ROOT
 from ..domain.weights import weight_summary, weight_rows
+from ..domain.bangle_sizes import size_for_dimensions
+from ..domain.ring_sizes import ring_size_rows
+from ..domain.workflow import label_key
 
 
 class ReportService:
@@ -478,6 +482,15 @@ class ReportService:
                     ):
                         value = dimensions_item.get(key)
                         rows.append([label_text, f"{float(value):.2f} mm" if value is not None else "Unavailable"])
+                    if label_key(str(item.get("label") or "")) == "bangle":
+                        size = size_for_dimensions(dimensions_item)
+                        rows.append(["Standard bangle size", size["display"]])
+                        if size["fit"]:
+                            rows.append(["Common fit", size["fit"]])
+                            rows.append(["Size basis", f"Nearest listed inner diameter ({size['reference_diameter_mm']:g} mm)"])
+                    if label_key(str(item.get("label") or "")) in {"finger ring", "ring"}:
+                        rows.extend([[Paragraph(escape(cell), body) for cell in row]
+                                     for row in ring_size_rows(dimensions_item)])
                     story.append(Table(rows, colWidths=[60 * mm, 105 * mm]))
                 beads_item = item.get("beads") or {}
                 if beads_item:
@@ -494,6 +507,8 @@ class ReportService:
                     if beads_item.get("summary"):
                         story.append(Paragraph(str(beads_item["summary"]), body))
                 stones_item = item.get("stones") or {}
+                if stones_item.get("thread"):
+                    story.append(Paragraph(stones_item["thread"]["status"], body))
                 if stones_item:
                     story.append(Paragraph(str(stones_item.get("risk_status") or "Stone analysis complete"), body))
                     if len(result_items) == 1 and stones_item.get("estimated_weight_g") is not None:
@@ -535,6 +550,15 @@ class ReportService:
             ):
                 value = dimensions.get(key)
                 rows.append([label_text, f"{float(value):.2f} mm" if value is not None else "Unavailable"])
+            if label_key(str((state.get("classification") or {}).get("confirmed_label") or "")) == "bangle":
+                size = size_for_dimensions(dimensions)
+                rows.append(["Standard bangle size", size["display"]])
+                if size["fit"]:
+                    rows.append(["Common fit", size["fit"]])
+                    rows.append(["Size basis", f"Nearest listed inner diameter ({size['reference_diameter_mm']:g} mm)"])
+            if label_key(str((state.get("classification") or {}).get("confirmed_label") or "")) in {"finger ring", "ring"}:
+                rows.extend([[Paragraph(escape(cell), body) for cell in row]
+                             for row in ring_size_rows(dimensions)])
             story.extend([Paragraph("Size details", heading), Table(rows, colWidths=[60 * mm, 105 * mm])])
 
         beads = (result.get("beads") or {}) if not result_items else {}

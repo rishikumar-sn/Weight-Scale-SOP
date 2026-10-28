@@ -67,7 +67,7 @@ class CaptureService:
             frame, camera_status = self.camera.snapshot_frame()
             return frame, camera_status, self.scale.snapshot()
         if reading_id is None:
-            raise RuntimeError("Press the ACCET scale button to capture the image and weight.")
+            raise RuntimeError("Press the ACZET scale button to capture the image and weight.")
         with self._event_lock:
             event = self._scale_events.pop(reading_id, None)
         if event is None or time.monotonic() - event[0] > 3:
@@ -90,7 +90,7 @@ class CaptureService:
                     path,
                     inset_px=12 if model == "essae_jx500" else 2,
                     outer_inset_ratio=0.035 if model in {"essae_jx500", "accet_cg1003l"} else 0.0,
-                    exclude_circle=model != "accet_cg1003l",
+                    exclude_circle=model == "essae_jx500",
                 )
             self._testbed_model = model
             return self._testbed_segmenter
@@ -304,15 +304,11 @@ class CaptureService:
         return state
 
     def capture_tare(self, mode: str, reading_id: int | None = None) -> dict[str, Any]:
-        """Save a packet tare image with its scale reading and verified packet ID."""
+        """Save a packet tare image and scale reading without requiring an AprilTag."""
         if mode not in {"pledge", "release"}:
             raise ValueError("Tare mode must be pledge or release")
 
         frame, camera_snapshot, scale_snapshot = self._capture_inputs(reading_id)
-        if scale_snapshot.get("model") == "accet_cg1003l":
-            tag = self.settings_store.get()["apriltag"]
-            detected = detect_apriltag(frame, None, int(tag["id"]), float(tag["width_mm"]), float(tag["height_mm"]))
-            apriltag_roi_from_detection(frame.shape, detected)
         if scale_snapshot.get("model") != "accet_cg1003l" and scale_snapshot.get("unit") not in (None, "g"):
             raise RuntimeError("ct capture is not allowed. Switch the scale to grams (g) and try again.")
         weight = scale_snapshot.get("weight_g")

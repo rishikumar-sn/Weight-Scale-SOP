@@ -4736,14 +4736,25 @@ def analyze_jewel_candidate(
         color_correction,
         mask=zoomed_mask,
     )
+    display_mask = zoomed_mask.copy()
+    exclusion = jewel.get("stone_exclusion_mask")
+    if exclusion is not None:
+        exclusion = cv2.resize(exclusion.astype(np.uint8),
+                              (zoomed_mask.shape[1], zoomed_mask.shape[0]),
+                              interpolation=cv2.INTER_NEAREST)
+        zoomed_mask = zoomed_mask.copy()
+        zoomed_mask[exclusion > 0] = 0
+        original_area = int(cv2.countNonZero(zoomed_mask))
     gold_px, gold_ratio = gold_support_stats(normalized_bgr, zoomed_mask)
     if gold_px < MIN_GOLD_PIXELS_FOR_STONE_DETECTION or gold_ratio < MIN_GOLD_RATIO_FOR_STONE_DETECTION:
         empty_regions: list[dict] = []
         masked_png, overlay_png, color_mask_png = render_jewel_outputs(
             display_bgr,
-            zoomed_mask,
+            display_mask,
             empty_regions,
         )
+        if exclusion is not None:
+            overlay_png[exclusion > 0] = display_bgr[exclusion > 0]
         jewel_report = build_jewel_report_dict(
             jewel_index=jewel_index,
             roi_mask=zoomed_mask,
@@ -5277,9 +5288,12 @@ def analyze_jewel_candidate(
 
     masked_png, overlay_png, color_mask_png = render_jewel_outputs(
         display_bgr,
-        zoomed_mask,
+        display_mask,
         regions,
     )
+    if exclusion is not None:
+        # Contour anti-aliasing must not paint across the excluded boundary.
+        overlay_png[exclusion > 0] = display_bgr[exclusion > 0]
     jewel_report = build_jewel_report_dict(
         jewel_index=jewel_index,
         roi_mask=zoomed_mask,
@@ -5398,7 +5412,10 @@ def analyze_image_bgr(
     fastsam_model: object | None = None,
     fastsam_lock: object | None = None,
     stone_v2_debug_dir: Path | None = None,
+    stone_exclusion_mask: np.ndarray | None = None,
 ) -> dict:
+    if stone_exclusion_mask is not None and stone_exclusion_mask.shape != image_bgr.shape[:2]:
+        raise ValueError("Stone exclusion mask must match the analysis image")
     working_bgr, normalized_ignore_regions = apply_ignore_regions_to_image(image_bgr, ignore_regions)
     if preset_candidates is not None:
         jewels = list(preset_candidates)
@@ -5449,6 +5466,10 @@ def analyze_image_bgr(
     jewel_views: list[dict] = []
 
     for jewel_index, jewel in enumerate(jewels, start=1):
+        if stone_exclusion_mask is not None:
+            jewel = dict(jewel)
+            x, y, w, h = jewel["bbox_global"]
+            jewel["stone_exclusion_mask"] = stone_exclusion_mask[y:y+h, x:x+w]
         jewel_report, jewel_view = analyze_jewel_candidate(
             jewel_index,
             jewel,
