@@ -31,7 +31,8 @@ def main():
     model_root = ROOT / "Classification/siglip2-base-patch16-384"
     SiglipImageProcessor.from_pretrained(str(model_root), local_files_only=True)
     Siglip2Tokenizer.from_pretrained(str(model_root), local_files_only=True)
-    paths = ["models/detection/bead_finder.onnx", "models/detection/beadfinder_old.onnx",
+    paths = ["models/classification/jewel-thread-small.onnx",
+             "models/detection/bead_finder.onnx", "models/detection/beadfinder_old.onnx",
              "models/packet/barcodescanner.onnx",
              "models/segmentation/testbed.onnx", "models/segmentation/essaetestbed.onnx",
              "models/segmentation/anomolies.onnx", "Classification/siglip2-base-patch16-384/vision_model.onnx",

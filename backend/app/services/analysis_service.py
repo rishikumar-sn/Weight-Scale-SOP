@@ -23,6 +23,7 @@ from ..analysis.beads import analyze_bead_detections, onnx_image_size, prepare_o
 from ..analysis.vision import separate_jewellery_items
 from ..analysis.foreign_objects import ForeignObjectDetector
 from ..analysis.thread_segmentation import ThreadSegmenter, project_thread_mask
+from ..analysis.thread_classifier import JewelThreadClassifier, THREAD_ONLY_MESSAGE
 from ..core.config import PROJECT_ROOT, FOREIGN_OBJECT_MODEL_PATH
 from ..domain.bangle_sizes import bangle_size
 from ..domain.ring_sizes import ring_size
@@ -376,6 +377,7 @@ class AnalysisService:
         self._beads: OnnxBeadDetector | None = None
         self._foreign_objects: ForeignObjectDetector | None = None
         self._thread: ThreadSegmenter | None = None
+        self._jewel_thread: JewelThreadClassifier | None = None
         self._active_capture: str | None = None
 
     @staticmethod
@@ -393,6 +395,15 @@ class AnalysisService:
         self._get_classifier()
         self._get_beads()
         self._get_foreign_objects()
+        self._get_jewel_thread()
+
+    def _get_jewel_thread(self) -> JewelThreadClassifier:
+        with self._model_lock:
+            if self._jewel_thread is None:
+                self._jewel_thread = JewelThreadClassifier(
+                    PROJECT_ROOT / "models" / "classification" / "jewel-thread-small.onnx"
+                )
+            return self._jewel_thread
 
     def _get_thread(self) -> ThreadSegmenter:
         with self._model_lock:
@@ -528,7 +539,7 @@ class AnalysisService:
         ]
         separated = [item for index, item in enumerate(separated, 1) if index not in foreign_indices]
         placement = check.get("placement_check") or {"passed": True}
-        if not placement["passed"] or (not check["passed"] and not separated):
+        if not placement["passed"] or not check["passed"]:
             state["rejection_kind"] = "foreign_objects" if not check["passed"] else "placement"
             labels = ", ".join(sorted({d["label"].replace("_", " ") for d in check["detections"]}))
             state["rejection_reason"] = (
@@ -536,8 +547,10 @@ class AnalysisService:
                 if not check["passed"] else
                 "Jewels are kept together. Keep them well separated and recapture the image."
             )
-            # No reliable separated jewellery remains to classify. Do not
-            # send contaminants or merged pieces to SigLIP as individual jewels.
+            # Anomaly and placement gates must pass before either classifier.
+            # A valid jewel elsewhere on the tray cannot cancel an anomaly.
+            state["route"] = {}
+            state["result"] = {}
             state["classification"] = {"count": 0, "items": [], "labels": [],
                                        "confirmed": False, "predicted_label": "",
                                        "confirmed_label": None}
@@ -554,17 +567,46 @@ class AnalysisService:
 
         item_dir = self.repository.session_dir(capture_id) / "items"
         item_dir.mkdir(parents=True, exist_ok=True)
+        # Preserve every gate input, including rejected captures, for review
+        # and retraining. Keep each separated item independent of its neighbours.
+        item_paths = []
+        for index, item in enumerate(separated, 1):
+            paths = {"raw": str(item_dir / f"item_{index:02d}_raw.png"),
+                     "working": str(item_dir / f"item_{index:02d}.png"),
+                     "mask": str(item_dir / f"item_{index:02d}_mask.png")}
+            for key, pixels in (("raw", item["raw_crop_bgr"]),
+                                ("working", item["crop_bgr"]), ("mask", item["mask"] * 255)):
+                if not cv2.imwrite(paths[key], pixels):
+                    raise RuntimeError(f"Could not save separated item {index}: {key}")
+            item_paths.append(paths)
+        thread_checks = [
+            {"item_index": index, "bbox": item["bbox"], "paths": item_paths[index - 1],
+             **self._get_jewel_thread().classify(item["raw_crop_bgr"])}
+            for index, item in enumerate(separated, 1)
+        ]
+        state["thread_only_check"] = {
+            "passed": all(item["passed"] for item in thread_checks), "items": thread_checks,
+        }
+        if not state["thread_only_check"]["passed"]:
+            state["rejection_kind"] = "thread_only"
+            affected = ", ".join(str(item["item_index"]) for item in thread_checks if not item["passed"])
+            state["rejection_reason"] = f"Item(s) {affected}: {THREAD_ONLY_MESSAGE}"
+            state["route"] = {}
+            state["result"] = {}
+            state["classification"] = {"count": 0, "items": [], "labels": [],
+                                       "confirmed": False, "predicted_label": "",
+                                       "confirmed_label": None}
+            state["status"] = "rejected"
+            state["updated_at"] = self._now()
+            self.repository.save(state)
+            self._save_rejected_review(state)
+            return state
         classifier = self._get_classifier()
         classified_items: list[dict[str, Any]] = []
         for index, separated_item in enumerate(separated, start=1):
-            crop_path = item_dir / f"item_{index:02d}.png"
-            raw_crop_path = item_dir / f"item_{index:02d}_raw.png"
-            mask_path = item_dir / f"item_{index:02d}_mask.png"
-            if not cv2.imwrite(str(crop_path), separated_item["crop_bgr"]):
-                raise RuntimeError(f"Could not save separated jewel {index}")
-            if not cv2.imwrite(str(raw_crop_path), separated_item["raw_crop_bgr"]):
-                raise RuntimeError(f"Could not save raw separated jewel {index}")
-            cv2.imwrite(str(mask_path), separated_item["mask"] * 255)
+            crop_path = Path(item_paths[index - 1]["working"])
+            raw_crop_path = Path(item_paths[index - 1]["raw"])
+            mask_path = Path(item_paths[index - 1]["mask"])
             raw_crop_rgb = cv2.cvtColor(
                 separated_item["raw_crop_bgr"],
                 cv2.COLOR_BGR2RGB,
@@ -605,6 +647,7 @@ class AnalysisService:
                     "mask": str(mask_path),
                 },
                 "predicted_label": predicted_label,
+                "thread_check": thread_checks[index - 1],
                 "model_label": prediction.model_label,
                 "model_confidence": float(prediction.model_confidence),
                 "decision_source": decision_source,
@@ -690,6 +733,8 @@ class AnalysisService:
             raise KeyError(capture_id)
         if state.get("status") == "rejected" or (state.get("foreign_object_check") or {}).get("passed") is False:
             raise RuntimeError(state.get("rejection_reason") or "Foreign objects detected; recapture.")
+        if (state.get("thread_only_check") or {}).get("passed") is False:
+            raise RuntimeError(THREAD_ONLY_MESSAGE)
         classification = state.get("classification") or {}
         classified_items = classification.get("items") or []
         if not classified_items:
@@ -1183,6 +1228,8 @@ class AnalysisService:
     def _run(self, capture_id: str) -> None:
         state = self.repository.get(capture_id)
         if not state:
+            return
+        if state.get("status") == "rejected" or (state.get("thread_only_check") or {}).get("passed") is False:
             return
         try:
             classified_items = (state.get("classification") or {}).get("items") or []

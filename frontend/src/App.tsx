@@ -879,7 +879,7 @@ export default function App() {
             {captureTab === "jewellery" && stage === "rejected" && (
               <div className="rejectedReview">
                 <span className="eyebrow errorText">Recapture required</span>
-                <h2>{active?.rejection_kind === "placement" ? "Separate the jewellery and recapture" : "Other objects detected with jewellery"}</h2>
+                <h2>{active?.rejection_kind === "thread_only" ? "Thread or tassel without a jewel detected" : active?.rejection_kind === "placement" ? "Separate the jewellery and recapture" : "Other objects detected with jewellery"}</h2>
                 <p role="alert">{active?.rejection_reason}</p>
                 <ResultImage src={media.evidence} alt="Capture requiring recapture" label="Captured evidence" />
                 <button className="primary" onClick={recapture} disabled={busy || !cameraReady || !live.scale?.connected || (!scaleButtonCapture && !rois.apriltag)}>

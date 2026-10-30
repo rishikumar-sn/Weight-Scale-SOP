@@ -1,0 +1,14 @@
+{
+  "source": "jewel-thread-small.pt",
+  "onnx": "jewel-thread-small.onnx",
+  "imgsz": 960,
+  "names": {
+    "0": "jewel_with_thread",
+    "1": "jewel_without_thread",
+    "2": "thread_only"
+  },
+  "source_sha256": "fe2fe36a05c47223016f5fa0d9fdca340954d5f74a1d2198235879209ca4cb5c",
+  "onnx_sha256": "0226b75f1ca06470292559ce6b690db86dd095d2272697e9847d474a415037f1",
+  "torch_version": "2.13.0+cpu",
+  "opset": 17
+}
