@@ -23,6 +23,8 @@ from .domain.workflow import class_labels
 from .hardware.camera import CameraService
 from .hardware.scale import ScaleService
 from .services.analysis_service import AnalysisService
+from .analysis.component_presence import blocks_jewellery_labels
+from .analysis.annotations import render_capture_review
 from .services.capture_service import CaptureService
 from .services.compression_service import ArtifactCompressionService
 from .services.report_service import ReportService
@@ -271,7 +273,12 @@ def create_tare_capture(payload: TareCaptureRequest, reading_id: int | None = No
 
 @app.get("/api/captures")
 def recent_captures(limit: int = 20):
-    return repository.list_recent(limit)
+    rows = repository.list_recent(limit)
+    for row in rows:
+        state = repository.get(row["id"])
+        if state and blocks_jewellery_labels(state):
+            row.update(label=None, status="rejected")
+    return rows
 
 
 @app.get("/api/captures/{capture_id}")
@@ -337,6 +344,22 @@ def artifact(capture_id: str, relative_path: str):
     target = (base / relative_path).resolve()
     if base not in target.parents or not target.is_file():
         raise HTTPException(status_code=404, detail="File not found")
+    state = repository.get(capture_id)
+    if state and blocks_jewellery_labels(state):
+        evidence = (state.get("paths") or {}).get("evidence")
+        if target.name == "classified_evidence.jpg" or (evidence and target == Path(evidence).resolve()):
+            # Render old rejected evidence from untouched pixels, without rewriting history.
+            import cv2
+            from io import BytesIO
+            original = cv2.imread(str((state.get("paths") or {}).get("original") or ""))
+            if original is None:
+                raise HTTPException(status_code=409, detail="Original capture unavailable; recapture.")
+            rendered = render_capture_review(original, state, [], rejected=True)
+            ok, encoded = cv2.imencode(".jpg", rendered)
+            if not ok:
+                raise HTTPException(status_code=500, detail="Could not render capture review")
+            return StreamingResponse(BytesIO(encoded.tobytes()), media_type="image/jpeg",
+                                     headers={"Cache-Control": "no-store"})
     return FileResponse(target)
 
 

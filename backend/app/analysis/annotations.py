@@ -286,6 +286,13 @@ def render_capture_review(image: np.ndarray, state: dict, items: list[dict], *,
                           confirmed: bool = False, rejected: bool = False) -> np.ndarray:
     """Display-only tray crop, labels and presence badge from existing decisions."""
     from datetime import datetime
+    from .component_presence import blocks_jewellery_labels
+
+    if blocks_jewellery_labels(state):
+        # A rejected legacy manifest may still contain old SigLIP predictions.
+        # Never paint those over an anomaly or an unverified region.
+        items = []
+        rejected = True
 
     photo = image.copy()
     rois = state.get("rois") or {}

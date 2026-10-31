@@ -22,7 +22,7 @@ def detector_for_rows(rows, prototypes):
     return detector
 
 
-@pytest.mark.parametrize("class_id,threshold", [(0, .45), (2, .25), (3, .35)])
+@pytest.mark.parametrize("class_id,threshold", [(0, .45), (2, .15), (3, .35)])
 def test_class_thresholds_and_jewellery_does_not_suppress_foreign(class_id, threshold):
     def row(score, category):
         result = [50, 50, 30, 30, 0, 0, 0, 0, 10]
@@ -78,7 +78,8 @@ def capture_service(monkeypatch, tmp_path):
         paths[name] = str(path)
 
     class Repository:
-        state = {"id": "capture", "paths": paths, "status": "captured"}
+        state = {"id": "capture", "paths": paths, "status": "captured",
+                 "rois": {"processing": {"x": 0, "y": 0, "w": 80, "h": 80}}}
 
         def get(self, _id):
             return deepcopy(self.state)
@@ -102,6 +103,7 @@ def capture_service(monkeypatch, tmp_path):
     monkeypatch.setattr("backend.app.services.analysis_service.separate_jewellery_items", lambda *_a, **_kw: [separated])
     service = AnalysisService(Repository())
     monkeypatch.setattr(service, "_get_classifier", lambda: Classifier())
+    monkeypatch.setattr(service, "_get_jewel_thread", lambda: SimpleNamespace(classify=lambda _: {"passed": True}))
     monkeypatch.setattr(service, "_save_classified_evidence", lambda *_a, **_kw: "review.jpg")
     yield service, raw
     service.shutdown()
@@ -112,11 +114,12 @@ def test_second_gate_uses_full_raw_and_blocks_confirm_and_learning(capture_servi
     service, raw = capture_service
     calls = []
 
-    def detect(image, mask):
+    def detect(image, mask, *, components):
         np.testing.assert_array_equal(image, raw)
         assert mask.shape == raw.shape[:2]
         calls.append(True)
-        return {"passed": not foreign, "detections": [{"label": "plastic_packet"}] if foreign else []}
+        return {"passed": not foreign, "detections": [{"label": "plastic_packet"}] if foreign else [],
+                "jewellery_instances": [{"component_overlaps": [{"component_index": 1, "component_share": .95}]}]}
 
     monkeypatch.setattr(service, "_get_foreign_objects", lambda: SimpleNamespace(detect=detect))
     state = service.classify("capture")
@@ -124,7 +127,7 @@ def test_second_gate_uses_full_raw_and_blocks_confirm_and_learning(capture_servi
     assert state["status"] == ("rejected" if foreign else "awaiting_confirmation")
     if foreign:
         for save_only in (True, False):
-            with pytest.raises(RuntimeError, match="other objects with jewellery"):
+            with pytest.raises(RuntimeError, match="Other objects detected"):
                 service.confirm_and_start("capture", "Bangle", True, override_not_gold=True, save_only=save_only)
     else:
         monkeypatch.setattr(service._executor, "submit", lambda *_a, **_kw: None)
@@ -135,9 +138,10 @@ def test_missing_raw_mask_fails_closed(capture_service, monkeypatch):
     service, _raw = capture_service
     service.repository.state["paths"].pop("testbed_source_mask")
     monkeypatch.setattr(service, "_get_foreign_objects", lambda: pytest.fail("Do not infer without a mask"))
-    with pytest.raises(RuntimeError, match="unavailable; recapture"):
-        service.classify("capture")
-    assert service.repository.state["status"] == "captured"
+    result = service.classify("capture")
+    assert result["status"] == "rejected"
+    assert result["rejection_kind"] == "verification_unavailable"
+    assert result["classification"]["items"] == []
 
 
 def test_model_failure_does_not_allow_confirmation(capture_service, monkeypatch):
@@ -147,7 +151,9 @@ def test_model_failure_does_not_allow_confirmation(capture_service, monkeypatch)
         raise RuntimeError("Foreign-object model failed")
 
     monkeypatch.setattr(service, "_get_foreign_objects", unavailable)
-    with pytest.raises(RuntimeError, match="model failed"):
-        service.classify("capture")
-    with pytest.raises(RuntimeError, match="Check the item type"):
+    result = service.classify("capture")
+    assert result["status"] == "rejected"
+    assert "model failed" in result["foreign_object_check"]["error"]
+    assert result["classification"]["items"] == []
+    with pytest.raises(RuntimeError, match="verification is unavailable"):
         service.confirm_and_start("capture", "Bangle", False)

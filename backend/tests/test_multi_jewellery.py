@@ -381,13 +381,19 @@ def test_only_not_gold_predictions_reject_without_review(monkeypatch, tmp_path, 
     service = AnalysisService(repository)
     monkeypatch.setattr("backend.app.services.analysis_service.separate_jewellery_items", lambda *_a, **_kw: [separated])
     monkeypatch.setattr(service, "_get_classifier", lambda: Classifier())
+    from types import SimpleNamespace
+    monkeypatch.setattr(service, "_check_foreign_objects", lambda *_: {
+        "passed": True, "detections": [], "jewellery_instances": [
+            {"component_overlaps": [{"component_index": 1, "component_share": .95}]}],
+    })
+    monkeypatch.setattr(service, "_get_jewel_thread", lambda: SimpleNamespace(classify=lambda _: {"passed": True}))
     monkeypatch.setattr(service, "_save_classified_evidence", lambda *_a, **_kw: pytest.fail("No classified preview"))
-    monkeypatch.setattr(service, "_save_rejected_review", lambda *_a: pytest.fail("No rejection preview"))
+    monkeypatch.setattr(service, "_save_rejected_review", lambda *_a: None)
     try:
-        with pytest.raises(RuntimeError, match="recapture"):
-            service.classify("non-gold")
-        assert repository.state["status"] == "captured"
-        assert "classification" not in repository.state
+        result = service.classify("non-gold")
+        assert result["status"] == "rejected"
+        assert result["rejection_kind"] == "non_jewellery"
+        assert result["classification"]["items"] == []
     finally:
         service.shutdown()
 

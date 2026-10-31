@@ -22,6 +22,9 @@ from ..analysis.bangle_placement import check_bangle_placement, PLACEMENT_MESSAG
 from ..analysis.beads import analyze_bead_detections, onnx_image_size, prepare_onnx_input
 from ..analysis.vision import separate_jewellery_items
 from ..analysis.foreign_objects import ForeignObjectDetector
+from ..analysis.component_presence import (
+    component_presence_check, blocks_jewellery_labels, empty_classification, PRESENCE_MESSAGE,
+)
 from ..analysis.thread_segmentation import ThreadSegmenter, project_thread_mask
 from ..analysis.thread_classifier import JewelThreadClassifier, THREAD_ONLY_MESSAGE
 from ..core.config import PROJECT_ROOT, FOREIGN_OBJECT_MODEL_PATH
@@ -530,7 +533,16 @@ class AnalysisService:
             padding_px=int(settings.get("padding_px", 18)),
             valid_area_mask=valid_area_mask,
         )
-        check = self._check_foreign_objects(state, separated)
+        try:
+            check = self._check_foreign_objects(state, separated)
+        except Exception as exc:
+            # A retry must not retain old classifications when verification fails.
+            state["foreign_object_check"] = {"passed": False, "detections": [],
+                                             "error": str(exc), "method": "verification_failed"}
+            return self._reject_unverified_capture(
+                state, "verification_unavailable",
+                "Object verification is unavailable. Please recapture after verification is restored.",
+            )
         state["foreign_object_check"] = check
         foreign_indices = set(check.get("foreign_component_indices", []))
         state["other_objects"] = [
@@ -539,12 +551,13 @@ class AnalysisService:
         ]
         separated = [item for index, item in enumerate(separated, 1) if index not in foreign_indices]
         placement = check.get("placement_check") or {"passed": True}
-        if not placement["passed"] or not check["passed"]:
-            state["rejection_kind"] = "foreign_objects" if not check["passed"] else "placement"
+        anomaly_blocked = blocks_jewellery_labels({"foreign_object_check": check})
+        if not placement["passed"] or anomaly_blocked:
+            state["rejection_kind"] = "foreign_objects" if anomaly_blocked else "placement"
             labels = ", ".join(sorted({d["label"].replace("_", " ") for d in check["detections"]}))
             state["rejection_reason"] = (
                 f"Other objects detected ({labels}). Remove them and recapture."
-                if not check["passed"] else
+                if anomaly_blocked else
                 "Jewels are kept together. Keep them well separated and recapture the image."
             )
             # Anomaly and placement gates must pass before either classifier.
@@ -560,10 +573,18 @@ class AnalysisService:
             self._save_rejected_review(state)
             return state
         if not separated:
-            raise RuntimeError(
-                "No separate jewellery item was found. Keep every jewel fully inside the jewellery area, "
-                "leave a visible gap between items, and capture again."
+            state["component_presence_check"] = component_presence_check(check, 0)
+            return self._reject_unverified_capture(
+                state, "unverified_foreground",
+                "No verified jewellery was found. Keep the jewellery clearly visible and recapture.",
             )
+
+        presence = component_presence_check(check, len(separated))
+        state["component_presence_check"] = presence
+        if not presence["passed"]:
+            # Do not assign a type (or learn a correction) to a shadow/edge simply
+            # because the category classifier must choose a jewellery class.
+            return self._reject_unverified_capture(state, "unverified_foreground", PRESENCE_MESSAGE)
 
         item_dir = self.repository.session_dir(capture_id) / "items"
         item_dir.mkdir(parents=True, exist_ok=True)
@@ -733,6 +754,8 @@ class AnalysisService:
             raise KeyError(capture_id)
         if state.get("status") == "rejected" or (state.get("foreign_object_check") or {}).get("passed") is False:
             raise RuntimeError(state.get("rejection_reason") or "Foreign objects detected; recapture.")
+        if blocks_jewellery_labels(state):
+            raise RuntimeError(state.get("rejection_reason") or PRESENCE_MESSAGE)
         if (state.get("thread_only_check") or {}).get("passed") is False:
             raise RuntimeError(THREAD_ONLY_MESSAGE)
         classification = state.get("classification") or {}
@@ -865,6 +888,14 @@ class AnalysisService:
         self._executor.submit(self._run, capture_id)
         return state
 
+    def _reject_unverified_capture(self, state: dict[str, Any], kind: str, reason: str) -> dict[str, Any]:
+        state.update(status="rejected", rejection_kind=kind, rejection_reason=reason,
+                     classification=empty_classification(), route={}, result={}, updated_at=self._now())
+        state.pop("thread_only_check", None)
+        self.repository.save(state)
+        self._save_rejected_review(state)
+        return state
+
     def _save_rejected_review(self, state: dict[str, Any]) -> None:
         """Best-effort display of an existing rejection; never change its gate."""
         original = (state.get("paths") or {}).get("original")
@@ -912,6 +943,9 @@ class AnalysisService:
 
     def public_state(self, state: dict[str, Any]) -> dict[str, Any]:
         payload = json.loads(json.dumps(state))
+        if blocks_jewellery_labels(payload):
+            payload.update(classification=empty_classification(), route={}, result={}, status="rejected")
+            payload.setdefault("rejection_reason", "Remove the other objects and recapture.")
         job = payload.get("job") or {}
         if job.get("status") in {"queued", "running"}:
             deadline = float(job.get("stage_started_epoch", time.time())) + float(job.get("stage_estimate", 0))
