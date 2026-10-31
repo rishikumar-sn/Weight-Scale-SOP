@@ -1,14 +1,15 @@
 {
-  "source": "jewel-thread-small.pt",
+  "source": "jewel-thread-classify-new.pt",
   "onnx": "jewel-thread-small.onnx",
   "imgsz": 960,
   "names": {
-    "0": "jewel_with_thread",
-    "1": "jewel_without_thread",
-    "2": "thread_only"
+    "0": "Empty-Test-Bed",
+    "1": "Jewel_with_Thread",
+    "2": "Jewel_without_Thread",
+    "3": "Thread-Only"
   },
-  "source_sha256": "fe2fe36a05c47223016f5fa0d9fdca340954d5f74a1d2198235879209ca4cb5c",
-  "onnx_sha256": "0226b75f1ca06470292559ce6b690db86dd095d2272697e9847d474a415037f1",
+  "source_sha256": "12c5ce7cc054f2c73f818ce72ac4e9aeab7e3b4287a508d014dbd98d2778945a",
+  "onnx_sha256": "b230061d4727051b9e7a88542f21039f0905183da18492d62390ed4b1413b8b1",
   "torch_version": "2.13.0+cpu",
   "opset": 17
 }

@@ -4540,7 +4540,8 @@ def gallery_learned_text(learned_representations: list[dict]) -> str:
 
 
 def build_result_gallery(jewel_views: list[dict], summary_fields: list[tuple[str, str]] | None = None,
-                         *, item_reference: str | None = None, weights: dict | None = None) -> np.ndarray:
+                         *, item_reference: str | None = None, weights: dict | None = None,
+                         description_only: bool = False) -> np.ndarray:
     import sys
     project_root = str(Path(__file__).resolve().parents[1])
     if project_root not in sys.path:
@@ -4548,11 +4549,12 @@ def build_result_gallery(jewel_views: list[dict], summary_fields: list[tuple[str
     from backend.app.analysis.annotations import add_side_panel, display_crop, identify_result_image
 
     if not jewel_views:
-        empty = add_side_panel(np.full((820, 820, 3), 255, dtype=np.uint8), "STONE ANALYSIS", [
-            ("RESULT", "No jewellery candidates found"),
-            ("STONE WEIGHT (ESTIMATED)" if weights is not None else "STONE SURFACE AREA",
-             f"{weights['stone_g']:.2f} g" if weights is not None and weights.get("stone_g") is not None else "Unavailable"),
-        ], note="A jewellery region is required to display stone analysis.", weights=weights)
+        fields = summary_fields or [("RESULT", "No jewellery candidates found")]
+        if not description_only and not summary_fields:
+            fields.append(("STONE WEIGHT (ESTIMATED)" if weights is not None else "STONE SURFACE AREA",
+                           f"{weights['stone_g']:.2f} g" if weights is not None and weights.get("stone_g") is not None else "Unavailable"))
+        empty = add_side_panel(np.full((820, 820, 3), 255, dtype=np.uint8), "STONE ANALYSIS", fields,
+                               note=None if description_only else "A jewellery region is required to display stone analysis.", weights=weights)
         return identify_result_image(empty, item_reference)
 
     tiles, margin = [], 16
@@ -4568,12 +4570,12 @@ def build_result_gallery(jewel_views: list[dict], summary_fields: list[tuple[str
                 source = display_crop(source, dict(x=x, y=y, w=w, h=h))
         fields = list(summary_fields) if summary_fields else [("RESULT", gallery_summary_text(
             view["detected_colors"], view.get("reflection"), view.get("stone_status")))]
-        if not any(caption in {"STONE SURFACE AREA", "STONE WEIGHT (ESTIMATED)"} for caption, _ in fields):
+        if not description_only and not any(caption in {"STONE SURFACE AREA", "STONE WEIGHT (ESTIMATED)"} for caption, _ in fields):
             fields.append(("STONE SURFACE AREA", "Unavailable"))
         learned = gallery_learned_text(view.get("learned_representations") or [])
-        if learned:
+        if learned and not description_only:
             fields.append(("LEARNED REFERENCES", learned))
-        note = "Detected stones are marked as green regions." if view.get("detected_colors") else None
+        note = "Detected stones are marked as green regions." if view.get("detected_colors") and not description_only else None
         tile = add_side_panel(source, "STONE ANALYSIS", fields, note=note, weights=weights)
         reference = item_reference or f"J{view['jewel_id']}"
         if item_reference and len(jewel_views) > 1:
@@ -5286,6 +5288,15 @@ def analyze_jewel_candidate(
                 "instances": [],
             }
 
+    try:
+        from .gemstone_colors import describe_regions
+    except ImportError:
+        from gemstone_colors import describe_regions
+    color_predictions = describe_regions(
+        jewel.get("original_color_bgr", jewel["crop_bgr"]), regions,
+        zoomed_mask, measurement_scale,
+    )
+
     masked_png, overlay_png, color_mask_png = render_jewel_outputs(
         display_bgr,
         display_mask,
@@ -5300,6 +5311,7 @@ def analyze_jewel_candidate(
         regions=regions,
         bbox_global=jewel["bbox_global"],
     )
+    jewel_report["color_predictions"] = color_predictions
     jewel_report["stone_area_statistics"] = _stone_area_stats
     if _stone_area_stats.get("success"):
         jewel_report["jewel_area_px"] = int(
@@ -5413,7 +5425,10 @@ def analyze_image_bgr(
     fastsam_lock: object | None = None,
     stone_v2_debug_dir: Path | None = None,
     stone_exclusion_mask: np.ndarray | None = None,
+    original_color_bgr: np.ndarray | None = None,
 ) -> dict:
+    if original_color_bgr is not None and original_color_bgr.shape != image_bgr.shape:
+        raise ValueError("Original color source must match analysis image coordinates")
     if stone_exclusion_mask is not None and stone_exclusion_mask.shape != image_bgr.shape[:2]:
         raise ValueError("Stone exclusion mask must match the analysis image")
     working_bgr, normalized_ignore_regions = apply_ignore_regions_to_image(image_bgr, ignore_regions)
@@ -5466,6 +5481,10 @@ def analyze_image_bgr(
     jewel_views: list[dict] = []
 
     for jewel_index, jewel in enumerate(jewels, start=1):
+        jewel = dict(jewel)
+        cx, cy, cw, ch = jewel["bbox_global"]
+        color_source = image_bgr if original_color_bgr is None else original_color_bgr
+        jewel["original_color_bgr"] = color_source[cy:cy+ch, cx:cx+cw]
         if stone_exclusion_mask is not None:
             jewel = dict(jewel)
             x, y, w, h = jewel["bbox_global"]

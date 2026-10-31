@@ -90,7 +90,7 @@ def test_stone_pipeline_rejects_gold_and_shadows_but_retains_stones(tmp_path, na
     cv2.imwrite(str(image_path), image)
     cv2.imwrite(str(mask_path), mask)
     state = {"id": name, "paths": {"working": str(image_path),
-             "prepared": str(image_path), "mask": str(mask_path)},
+             "original": str(image_path), "prepared": str(image_path), "mask": str(mask_path)},
              "classification": {"count": 1, "confirmed_label": "Earrings / Nosepin"},
              "calibration": {"available": True, "found": True,
                              "mm_per_pixel_x": .18, "mm_per_pixel_y": .18}}
@@ -119,7 +119,7 @@ def test_decorated_gold_recesses_and_glare_do_not_become_stones(tmp_path, highli
     cv2.imwrite(str(image_path), image)
     cv2.imwrite(str(mask_path), mask)
     state = {"id": "decorated", "paths": {"working": str(image_path),
-             "prepared": str(image_path), "mask": str(mask_path)},
+             "original": str(image_path), "prepared": str(image_path), "mask": str(mask_path)},
              "classification": {"count": 1},
              "calibration": {"available": True, "found": True,
                              "mm_per_pixel_x": .18, "mm_per_pixel_y": .18}}

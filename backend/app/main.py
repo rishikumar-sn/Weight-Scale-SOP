@@ -18,7 +18,7 @@ from .core.config import (
     SESSIONS_DIR,
     SettingsStore,
 )
-from .domain.schemas import CameraFlickerSettings, CameraRotationSettings, ClassificationConfirmation, RoiSettings, ScaleSettings, TareCaptureRequest
+from .domain.schemas import CameraFlickerSettings, CameraRotationSettings, ClassificationConfirmation, RoiSettings, ScaleSettings, StoneAnalysisSettings, TareCaptureRequest
 from .domain.workflow import class_labels
 from .hardware.camera import CameraService
 from .hardware.scale import ScaleService
@@ -218,6 +218,11 @@ def save_camera_flicker(payload: CameraFlickerSettings):
     saved = settings_store.update({"camera": {"anti_flicker_mode": payload.mode}})
     camera.request_reconnect()
     return {"settings": saved}
+
+
+@app.put("/api/settings/stone-analysis")
+def set_stone_analysis(payload: StoneAnalysisSettings):
+    return {"settings": settings_store.update({"stone_analysis": payload.model_dump()})}
 
 
 @app.put("/api/settings/scale")

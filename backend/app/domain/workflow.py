@@ -24,6 +24,16 @@ def label_key(value: str | None) -> str:
     return " ".join(str(value or "").replace("/", " ").split()).casefold()
 
 
+THREAD_CLASSIFIER_LABELS = BEAD_LABELS | {
+    "mattal", "ear chain", "ear chains", "chain bracelet", "waist chain", "hip chain",
+}
+
+
+def uses_thread_classifier(label: str | None) -> bool:
+    """Only explicit chain-type predictions use the provisional thread model."""
+    return label_key(label) in THREAD_CLASSIFIER_LABELS
+
+
 def route_for_label(label: str, *, bangle_orientation: str | None = None) -> dict[str, Any]:
     key = label_key(label)
     if key in {"finger ring", "ring"}:

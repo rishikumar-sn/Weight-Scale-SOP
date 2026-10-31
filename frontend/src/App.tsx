@@ -93,8 +93,9 @@ export default function App() {
   const [message, setMessage] = useState("Place the jewellery and check the weight.");
   const [error, setError] = useState("");
   const [setupOpen, setSetupOpen] = useState(false);
-  const [settingsSection, setSettingsSection] = useState<"flicker" | "areas" | "rotation" | "scale">("flicker");
+  const [settingsSection, setSettingsSection] = useState<"flicker" | "areas" | "rotation" | "scale" | "stones">("flicker");
   const [flickerMode, setFlickerMode] = useState("driver");
+  const [stoneWeightEnabled, setStoneWeightEnabled] = useState(false);
   const [scaleModel, setScaleModel] = useState("embsys_wm");
   const [cameraRotation, setCameraRotation] = useState(-90);
   const [settingsSaving, setSettingsSaving] = useState(false);
@@ -178,6 +179,7 @@ export default function App() {
       setHardwarePlatform(data.platform);
       setFlickerMode(data.settings.camera.anti_flicker_mode);
       setScaleModel(data.settings.scale.model || "embsys_wm");
+      setStoneWeightEnabled(data.settings.stone_analysis?.enable_weight_estimation ?? false);
       setCameraRotation(data.settings.camera.rotation % 360 === 90 ? 90 : -90);
       setLabels(data.labels || []);
       setRois(data.settings.rois || { processing: null, apriltag: null });
@@ -354,6 +356,7 @@ export default function App() {
       setFlickerMode(settings?.camera?.anti_flicker_mode || "driver");
       setCameraRotation(settings?.camera?.rotation % 360 === 90 ? 90 : -90);
       setScaleModel(settings?.scale?.model || "embsys_wm");
+      setStoneWeightEnabled(settings?.stone_analysis?.enable_weight_estimation ?? false);
       setDraftRois(rois);
       setSettingsNotice("");
     }
@@ -643,6 +646,17 @@ export default function App() {
     void task.finally(() => { scaleCaptureBusyRef.current = false; });
   }, [live.scale?.capture_event_id, scaleButtonCapture]);
 
+  async function saveStoneAnalysis() {
+    setSettingsSaving(true);
+    setSettingsNotice("");
+    try {
+      const data = await requestJson("/api/settings/stone-analysis", { method: "PUT", body: JSON.stringify({ enable_weight_estimation: stoneWeightEnabled }) });
+      setSettings(data.settings);
+      setSettingsNotice("Stone analysis settings saved for future captures on every scale.");
+    } catch (err: any) { setSettingsNotice(err.message || "Unable to save stone analysis settings."); }
+    finally { setSettingsSaving(false); }
+  }
+
   const weight = live.scale?.connected ? (live.scale?.value ?? live.scale?.weight_g) : undefined;
   const weightUnit = live.scale?.unit || "g";
   const weightPrecision = live.scale?.model !== "embsys_wm" ? 3 : 2;
@@ -773,6 +787,7 @@ export default function App() {
                 <button aria-current={settingsSection === "areas" ? "page" : undefined} onClick={() => { setSettingsSection("areas"); setSettingsNotice(""); }}>Camera areas</button>
                 <button aria-current={settingsSection === "rotation" ? "page" : undefined} onClick={() => { setSettingsSection("rotation"); setDrawingTarget(null); dragRef.current = null; setSettingsNotice(""); }}>Camera rotation</button>
                 <button aria-current={settingsSection === "scale" ? "page" : undefined} onClick={() => { setSettingsSection("scale"); setDrawingTarget(null); dragRef.current = null; setSettingsNotice(""); }}>Weight scale</button>
+                <button aria-current={settingsSection === "stones" ? "page" : undefined} onClick={() => { setSettingsSection("stones"); setDrawingTarget(null); dragRef.current = null; setSettingsNotice(""); }}>Stone analysis</button>
               </nav>
               <div className="settingsContent">
                 {!settings ? <p role="status">Loading settings…</p> : settingsSection === "flicker" ? <>
@@ -800,6 +815,11 @@ export default function App() {
                     : <p>ESSAE JX500 finds its USB port automatically, including when the port number changes. Its decoded USB output must be connected.</p>}
                   <div className="filterStatus" role="status"><strong>{live.scale?.status || "Waiting for scale"}</strong><span>{live.scale?.port || "Searching for USB scale"}</span>{live.scale?.error && <span>{live.scale.error}</span>}</div>
                   <button className="primary" disabled={settingsSaving || busy || stage === "processing"} onClick={saveScale}>{settingsSaving ? "Applying..." : "Apply scale"}</button>
+                </> : settingsSection === "stones" ? <>
+                  <h3>Stone analysis</h3>
+                  <label><input type="checkbox" checked={stoneWeightEnabled} disabled={settingsSaving} onChange={event => { setStoneWeightEnabled(event.target.checked); setSettingsNotice(""); }} /> Enable stone weight estimation</label>
+                  <p>Show estimated stone and net weights for single-jewel captures. Applies to every weight scale. When disabled, only the captured scale weight is printed. Color, count and size analysis continues.</p>
+                  <button className="primary" disabled={settingsSaving || busy || stage === "processing"} onClick={saveStoneAnalysis}>{settingsSaving ? "Saving..." : "Save stone analysis"}</button>
                 </> : settingsSection === "rotation" ? <>
                   <h3>Camera rotation</h3>
                   <p>Choose the camera orientation. Both options keep the full-resolution image at 1080 × 1920.</p>
@@ -879,7 +899,7 @@ export default function App() {
             {captureTab === "jewellery" && stage === "rejected" && (
               <div className="rejectedReview">
                 <span className="eyebrow errorText">Recapture required</span>
-                <h2>{active?.rejection_kind === "unverified_foreground" || active?.rejection_kind === "verification_unavailable" ? "Check the capture and recapture" : active?.rejection_kind === "thread_only" ? "Thread or tassel without a jewel detected" : active?.rejection_kind === "placement" ? "Separate the jewellery and recapture" : "Other objects detected with jewellery"}</h2>
+                <h2>{active?.rejection_kind === "unverified_foreground" || active?.rejection_kind === "verification_unavailable" ? "Check the capture and recapture" : active?.rejection_kind === "empty_testbed" ? "Place jewellery and recapture" : active?.rejection_kind === "thread_only" ? "Thread or tassel without a jewel detected" : active?.rejection_kind === "placement" ? "Separate the jewellery and recapture" : "Other objects detected with jewellery"}</h2>
                 <p role="alert">{active?.rejection_reason}</p>
                 <ResultImage src={media.evidence} alt="Capture requiring recapture" label="Captured evidence" />
                 <button className="primary" onClick={recapture} disabled={busy || !cameraReady || !live.scale?.connected || (!scaleButtonCapture && !rois.apriltag)}>
@@ -990,7 +1010,7 @@ export default function App() {
                   alt="Captured jewellery with jewel details"
                   label="Captured image and details"
                 />
-                {result.count === 1 && (result.items?.[0]?.route?.stones || result.items?.[0]?.stones || result.stones) && <WeightTable weights={result.weights} gross={active?.weight_g} />}
+                {result.weights?.enabled !== false && result.stone_weight_estimation_enabled !== false && result.count === 1 && (result.items?.[0]?.route?.stones || result.items?.[0]?.stones || result.stones) && <WeightTable weights={result.weights} gross={active?.weight_g} />}
                 <div className="itemResults">
                   {(result.items || []).map((item: any, itemPosition: number) => {
                     const itemMedia = (media.items || [])[itemPosition] || {};
@@ -1024,6 +1044,8 @@ export default function App() {
                           {item.beads && <div><span>Bead analysis</span><strong>{item.beads.beads_detected ? "Beads detected" : "Beads not detected"}</strong></div>}
                           {item.beads && <div><span>Bead count</span><strong>{item.beads.count ?? item.beads.detections?.length ?? "Unavailable"}</strong></div>}
                           {item.beads?.summary && <div className="wide"><span>Bead insights</span><strong>{item.beads.summary}</strong></div>}
+                          {item.stones?.summary && <div className="wide"><span>Stone insights</span><strong>{item.stones.summary}</strong></div>}
+                          {item.stones?.color_note && <p className="wide">{item.stones.color_note}</p>}
                           {item.stones?.thread && <div><span>Thread analysis</span><strong>{item.stones.thread.status}</strong></div>}
                           {item.stones?.stone_area_mm2 != null && <div><span>Detected stone area</span><strong>{Number(item.stones.stone_area_mm2).toFixed(2)} mm²</strong></div>}
                           {item.stones && <div className={`wide riskTag risk${item.stones.risk_level || "NONE"}`}><span>Stone analysis</span><strong>{({ HIGH: "High stones region", MEDIUM: "Medium stones", LOW: "Low stones", NONE: "No stones" } as Record<string, string>)[item.stones.risk_level || "NONE"] || "No stones"}</strong></div>}

@@ -26,13 +26,14 @@ from ..analysis.component_presence import (
     component_presence_check, blocks_jewellery_labels, empty_classification, PRESENCE_MESSAGE,
 )
 from ..analysis.thread_segmentation import ThreadSegmenter, project_thread_mask
-from ..analysis.thread_classifier import JewelThreadClassifier, THREAD_ONLY_MESSAGE
+from ..analysis.thread_classifier import JewelThreadClassifier, THREAD_ONLY_MESSAGE, EMPTY_TESTBED_MESSAGE
 from ..core.config import PROJECT_ROOT, FOREIGN_OBJECT_MODEL_PATH
 from ..domain.bangle_sizes import bangle_size
 from ..domain.ring_sizes import ring_size
-from ..domain.workflow import BEAD_LABELS, label_key, route_for_label
+from ..domain.workflow import BEAD_LABELS, label_key, route_for_label, uses_thread_classifier
 from ..domain.weights import (
     stone_weight_fields,
+    stone_estimation_enabled,
     weight_summary,
     without_stone_weight_estimates,
 )
@@ -600,28 +601,6 @@ class AnalysisService:
                 if not cv2.imwrite(paths[key], pixels):
                     raise RuntimeError(f"Could not save separated item {index}: {key}")
             item_paths.append(paths)
-        thread_checks = [
-            {"item_index": index, "bbox": item["bbox"], "paths": item_paths[index - 1],
-             **self._get_jewel_thread().classify(item["raw_crop_bgr"])}
-            for index, item in enumerate(separated, 1)
-        ]
-        state["thread_only_check"] = {
-            "passed": all(item["passed"] for item in thread_checks), "items": thread_checks,
-        }
-        if not state["thread_only_check"]["passed"]:
-            state["rejection_kind"] = "thread_only"
-            affected = ", ".join(str(item["item_index"]) for item in thread_checks if not item["passed"])
-            state["rejection_reason"] = f"Item(s) {affected}: {THREAD_ONLY_MESSAGE}"
-            state["route"] = {}
-            state["result"] = {}
-            state["classification"] = {"count": 0, "items": [], "labels": [],
-                                       "confirmed": False, "predicted_label": "",
-                                       "confirmed_label": None}
-            state["status"] = "rejected"
-            state["updated_at"] = self._now()
-            self.repository.save(state)
-            self._save_rejected_review(state)
-            return state
         classifier = self._get_classifier()
         classified_items: list[dict[str, Any]] = []
         for index, separated_item in enumerate(separated, start=1):
@@ -668,7 +647,6 @@ class AnalysisService:
                     "mask": str(mask_path),
                 },
                 "predicted_label": predicted_label,
-                "thread_check": thread_checks[index - 1],
                 "model_label": prediction.model_label,
                 "model_confidence": float(prediction.model_confidence),
                 "decision_source": decision_source,
@@ -693,6 +671,42 @@ class AnalysisService:
                     for score in prediction.scores
                 ],
             })
+
+        # Predict each jewellery type first. The provisional thread model is
+        # only applicable to chain-type items, independently in mixed captures.
+        thread_checks = []
+        for item, separated_item in zip(classified_items, separated):
+            applicable = uses_thread_classifier(item["predicted_label"])
+            check = {
+                "item_index": item["index"], "bbox": item["bbox"], "paths": item["paths"],
+                "jewellery_label": item["predicted_label"], "applicable": applicable,
+            }
+            if applicable:
+                check.update(self._get_jewel_thread().classify(separated_item["raw_crop_bgr"]))
+            else:
+                check.update(passed=True, status="skipped", reason="Thread classifier applies only to chain-type jewellery.")
+            item["thread_check"] = check
+            thread_checks.append(check)
+        state["thread_only_check"] = {
+            "passed": all(item["passed"] for item in thread_checks), "items": thread_checks,
+        }
+        if not state["thread_only_check"]["passed"]:
+            failed = [item for item in thread_checks if not item["passed"]]
+            state["rejection_kind"] = "empty_testbed" if all(item["label"] == "empty_testbed" for item in failed) else "thread_only"
+            state["rejection_reason"] = " ".join(
+                f"Item {item['item_index']}: " + (EMPTY_TESTBED_MESSAGE if item["label"] == "empty_testbed" else THREAD_ONLY_MESSAGE)
+                for item in failed
+            )
+            state["route"] = {}
+            state["result"] = {}
+            state["classification"] = {"count": 0, "items": [], "labels": [],
+                                       "confirmed": False, "predicted_label": "",
+                                       "confirmed_label": None}
+            state["status"] = "rejected"
+            state["updated_at"] = self._now()
+            self.repository.save(state)
+            self._save_rejected_review(state)
+            return state
 
         for item in classified_items:
             if label_key(item["predicted_label"]) == "bangle":
@@ -757,7 +771,7 @@ class AnalysisService:
         if blocks_jewellery_labels(state):
             raise RuntimeError(state.get("rejection_reason") or PRESENCE_MESSAGE)
         if (state.get("thread_only_check") or {}).get("passed") is False:
-            raise RuntimeError(THREAD_ONLY_MESSAGE)
+            raise RuntimeError(state.get("rejection_reason") or THREAD_ONLY_MESSAGE)
         classification = state.get("classification") or {}
         classified_items = classification.get("items") or []
         if not classified_items:
@@ -1180,8 +1194,18 @@ class AnalysisService:
                     }
             except (KeyError, TypeError, ValueError):
                 measurement_scale = None
+        # Color analysis always reads the unmodified full-resolution capture.
+        original = cv2.imread(state["paths"]["original"])
+        origin = (state.get("rois") or {}).get("processing") or {"x": 0, "y": 0}
+        bbox = (item or {}).get("bbox") or {"x": 0, "y": 0}
+        ox, oy = int(origin["x"]) + int(bbox["x"]), int(origin["y"]) + int(bbox["y"])
+        if original is None:
+            raise RuntimeError("Original full-resolution capture is unavailable for stone color analysis")
+        from StoneDetection.gemstone_colors import original_color_crop
+        original_color = original_color_crop(original, ox, oy, image.shape[:2])
         analysis = stone_detection.analyze_image_bgr(
             image,
+            original_color_bgr=original_color,
             source_name=paths["prepared"],
             zoom_scale=1,
             preset_candidates=preset_candidates,
@@ -1206,7 +1230,7 @@ class AnalysisService:
         classification = state.get("classification") or {}
         classified_items = classification.get("items") or []
         jewel_count = int(classification.get("count") or len(classified_items) or 1)
-        estimate_weight = jewel_count == 1
+        estimate_weight = jewel_count == 1 and stone_estimation_enabled(state)
         suffix = f"item_{int(item['index']):02d}" if item else "capture"
         output_dir = self.repository.session_dir(state["id"]) / "results" / "stones" / suffix
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -1216,6 +1240,12 @@ class AnalysisService:
         area = measurements.get("total_area_mm2")
         stones_found = str(risk.get("level") or "NONE") != "NONE"
         area_text = f"{float(area):.2f} mm\u00b2" if stones_found and area is not None else "Not reported"
+        from StoneDetection.gemstone_colors import stone_description
+        description = stone_description(
+            [entry for jewel in report.get("jewels", []) for entry in jewel.get("color_predictions", [])],
+            str(label or "jewellery"), stones_found,
+        )
+        report["stone_description"] = description
         report["reflection_notice"] = None
         gallery_weights = None
         if estimate_weight:
@@ -1231,10 +1261,17 @@ class AnalysisService:
         if estimate_weight:
             stone_g = gallery_weights.get("stone_g")
             stone_metric = ("STONE WEIGHT (ESTIMATED)", f"{stone_g:.2f} g" if stone_g is not None else "Unavailable")
-        summary_fields = [("RESULT", str(risk.get("status") or "No stones")), stone_metric]
+        summary_fields = ([("RESULT", str(risk.get("status") or "No stones")), stone_metric]
+                          if estimate_weight else [])
+        if description["summary"]:
+            summary_fields.append(("STONE INSIGHTS", description["summary"]))
+            if estimate_weight:
+                summary_fields.append(("NOTE", description["color_note"]))
+        elif not summary_fields:
+            summary_fields.append(("RESULT", "No stones"))
         if thread_result is not None:
             summary_fields.append(("THREAD", thread_result["status"]))
-        gallery = stone_detection.build_result_gallery(analysis["jewel_views"], summary_fields=summary_fields, item_reference=jewel_reference(item), weights=gallery_weights)
+        gallery = stone_detection.build_result_gallery(analysis["jewel_views"], summary_fields=summary_fields, item_reference=jewel_reference(item), weights=gallery_weights, description_only=not estimate_weight)
         cv2.imwrite(str(gallery_path), gallery)
         report_path = self._save_json(
             output_dir / "result.json",
@@ -1243,6 +1280,8 @@ class AnalysisService:
         result = {
             # Risk NONE includes calibrated sub-5 mm² regions suppressed as
             # likely reflections/texture rather than reported as real stones.
+            **description,
+            "weight_estimation_enabled": estimate_weight,
             "reflection_flagged": False,
             "reflection_notice": None,
             "found": stones_found,
@@ -1349,6 +1388,7 @@ class AnalysisService:
                 "items": [item["route"] for item in result_items],
             })
             if len(result_items) == 1:
+                result["stone_weight_estimation_enabled"] = stone_estimation_enabled(state)
                 result["weights"] = weight_summary(state)
             if self.artifact_finalizer is not None:
                 self._update_job(

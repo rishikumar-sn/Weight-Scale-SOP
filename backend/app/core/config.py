@@ -64,6 +64,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "width_mm": 10.0,
         "height_mm": 10.0,
     },
+    "stone_analysis": {"enable_weight_estimation": False},
     "analysis": {
         "item_separation": {
             "min_area_ratio": 0.00045,

@@ -1,5 +1,6 @@
 """Development-only ONNX export; deployment needs only ONNX Runtime."""
 from pathlib import Path
+import argparse
 import hashlib
 import json
 
@@ -11,8 +12,13 @@ def main():
     import torch
 
     torch.set_num_threads(2)
-    source = ROOT / "models/classification/jewel-thread-small.pt"
-    target = source.with_suffix(".onnx")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--source", type=Path, default=ROOT / "models/classification/jewel-thread-small.pt")
+    parser.add_argument("--output", type=Path)
+    args = parser.parse_args()
+    source = args.source.resolve()
+    target = (args.output or source.with_suffix(".onnx")).resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
     checkpoint = torch.load(source, map_location="cpu", weights_only=False)
     model = checkpoint["model"].float().eval()
     size = int(checkpoint["train_args"]["imgsz"])

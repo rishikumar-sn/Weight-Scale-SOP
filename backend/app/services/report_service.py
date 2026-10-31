@@ -16,7 +16,7 @@ from reportlab.lib.units import mm
 from reportlab.platypus import Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from ..core.config import PROJECT_ROOT
-from ..domain.weights import weight_summary, weight_rows
+from ..domain.weights import weight_summary, weight_rows, stone_estimation_enabled
 from ..domain.bangle_sizes import size_for_dimensions
 from ..domain.ring_sizes import ring_size_rows
 from ..domain.workflow import label_key
@@ -268,7 +268,7 @@ class ReportService:
             (item.get("route") or {}).get("stones") or item.get("stones")
             for item in (items or [result])
         )
-        rows = weight_rows(weight_summary(state)) if count == 1 and stone_analysis_applies else []
+        rows = weight_rows(weight_summary(state)) if count == 1 and stone_analysis_applies and stone_estimation_enabled(state) else []
         row_height = px(62)
         column_offsets = [0, int(available_width * 0.40), int(available_width * 0.66), available_width]
         for row_index, row in enumerate(rows):
@@ -420,7 +420,7 @@ class ReportService:
         story.extend([Paragraph("Capture details", heading), table])
 
         result = state.get("result") or {}
-        if int(result.get("count") or len(result.get("items") or [])) == 1 and any(
+        if stone_estimation_enabled(state) and int(result.get("count") or len(result.get("items") or [])) == 1 and any(
             (item.get("route") or {}).get("stones") or item.get("stones")
             for item in (result.get("items") or [result])
         ):
@@ -510,8 +510,13 @@ class ReportService:
                 if stones_item.get("thread"):
                     story.append(Paragraph(stones_item["thread"]["status"], body))
                 if stones_item:
-                    story.append(Paragraph(str(stones_item.get("risk_status") or "Stone analysis complete"), body))
-                    if len(result_items) == 1 and stones_item.get("estimated_weight_g") is not None:
+                    if stones_item.get("summary"):
+                        story.append(Paragraph(escape(stones_item["summary"]), body))
+                        if stone_estimation_enabled(state):
+                            story.append(Paragraph(escape(stones_item.get("color_note", "")), body))
+                    else:
+                        story.append(Paragraph(str(stones_item.get("risk_status") or "No stones"), body))
+                    if stone_estimation_enabled(state) and len(result_items) == 1 and stones_item.get("estimated_weight_g") is not None:
                         weights = weight_summary(state)
                         story.append(Paragraph(
                             f"Estimated stone weight: {weights['stone_g']:.2f} g; "
@@ -578,9 +583,9 @@ class ReportService:
 
         stones = (result.get("stones") or {}) if not result_items else {}
         if stones:
-            stone_lines = [str(stones.get("risk_status") or "No stones")]
-            if stones.get("found"):
-                stone_lines.append("Detected stone regions are highlighted in green.")
+            stone_lines = [escape(stones["summary"])] if stones.get("summary") else [str(stones.get("risk_status") or "No stones")]
+            if stones.get("summary") and stone_estimation_enabled(state):
+                stone_lines.append(escape(stones.get("color_note", "")))
             story.extend([Paragraph("Stone details", heading), Paragraph("<br/>".join(stone_lines), body)])
 
         result_images = [

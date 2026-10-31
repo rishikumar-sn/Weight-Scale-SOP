@@ -218,6 +218,21 @@ def add_side_panel(image: np.ndarray, title: str, fields: list[tuple[str, str]],
             prepared.append((caption, value, captions, content, value_size, row_height, items, table, category))
         if sum(row[5] for row in prepared) <= bottom - top:
             break
+    # Stone descriptions vary with region/color groups. Extend only the
+    # information canvas when minimum readable type still cannot fit; otherwise
+    # the summary overlaps the weight table and footer on dense captures.
+    overflow = max(0, sum(row[5] for row in prepared) - (bottom - top))
+    if stage == 3 and overflow:
+        extra = int(overflow) + 24
+        height += extra
+        bottom += extra
+        if weight_table_top is not None:
+            weight_table_top += extra
+        expanded = Image.new("RGB", (width, height), paper)
+        expanded.paste(canvas, (0, 0))
+        canvas = expanded
+        draw = ImageDraw.Draw(canvas)
+        draw.line((split, header, split, height), fill=rule)
     y = top
     for caption, value, captions, content, value_size, row_height, items, table, category in prepared:
         ty = y

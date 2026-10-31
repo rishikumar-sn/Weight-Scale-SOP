@@ -62,3 +62,7 @@ class CameraRotationSettings(BaseModel):
 
 class ScaleSettings(BaseModel):
     model: Literal["embsys_wm", "essae_jx500", "accet_cg1003l"]
+
+
+class StoneAnalysisSettings(BaseModel):
+    enable_weight_estimation: bool

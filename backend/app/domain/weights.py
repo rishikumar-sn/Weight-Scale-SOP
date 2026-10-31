@@ -61,7 +61,19 @@ def without_stone_weight_estimates(value: Any) -> Any:
     return value
 
 
+def stone_estimation_enabled(state: dict) -> bool:
+    # Historical captures retain their original presentation; new snapshots
+    # always contain the explicit shared setting (default off).
+    setting = (state.get("settings_snapshot") or {}).get("stone_analysis")
+    if setting is not None:
+        return bool(setting.get("enable_weight_estimation", False))
+    result = state.get("result") or {}
+    return bool(result.get("stone_weight_estimation_enabled", True))
+
+
 def weight_summary(state: dict) -> dict:
+    if not stone_estimation_enabled(state):
+        return {"gross_g": valid_weight(state.get("weight_g")), "enabled": False}
     result = state.get("result") or {}
     items = result.get("items") or []
     count = result.get("count", (state.get("classification") or {}).get("count", len(items)))
