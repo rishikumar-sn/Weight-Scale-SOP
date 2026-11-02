@@ -30,6 +30,7 @@ def main():
     onnx.helper.set_model_props(exported, {
         "names": str(model.names), "task": "classify", "imgsz": str([size, size]),
         "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        "input_source": "raw_item_crop",
         "preprocessing": "RGB; PIL bilinear shortest-edge resize; center crop; float32 / 255",
     })
     onnx.checker.check_model(exported)
@@ -37,7 +38,8 @@ def main():
     metadata = {"source": source.name, "onnx": target.name, "imgsz": size,
                 "names": model.names, "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
                 "onnx_sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
-                "torch_version": torch.__version__, "opset": 17}
+                "torch_version": torch.__version__, "ultralytics_checkpoint_version": checkpoint.get("version"),
+                "input_source": "raw_item_crop", "preprocessing": str(getattr(model, "transforms", "")), "opset": 17}
     target.with_suffix(".onnx.infer.json").write_text(json.dumps(metadata, indent=2) + "\n")
     print(json.dumps(metadata, indent=2))
 

@@ -1,72 +1,77 @@
-# Updated jewel/thread classification model - 31 October 2026
+# Crop-trained jewel/thread classifier v2 - 2 November 2026
 
-The checkpoint jewel-thread-classify-new.pt was converted to the existing runtime
-path models/classification/jewel-thread-small.onnx (CPU, float32, opset 17,
-1 x 3 x 960 x 960 input). Its SHA-256 and export details are recorded in the
-adjacent .onnx.infer.json file. The supplied checkpoint remains in Downloads.
-No export/training dependencies were added to the application environment.
+Active runtime model: models/classification/jewel-thread-small.onnx.
+Source: jewel_thread_cls_4class_yolos_960-v2.pt in Downloads. Export: CPU float32,
+opset 17, static 1 x 3 x 960 x 960 input, four probability outputs. Source and ONNX
+SHA-256 values are in the adjacent .onnx.infer.json. Export-only dependencies are
+isolated under experiments/thread_model_export/.venv; app requirements are unchanged.
 
-This checkpoint has FOUR classes in this order:
+## Input and application order
 
-0. Empty-Test-Bed -> empty_testbed
-1. Jewel_with_Thread -> jewel_with_thread
-2. Jewel_without_Thread -> jewel_without_thread
-3. Thread-Only -> thread_only
+The supplied training dataset data/datasets/jewel-thread-crops-20261031 contains
+native raw per-object crops. The application supplies the same raw_crop_bgr
+produced by Otsu object separation, for EACH object in single and multiple captures.
+It does not pass the full camera frame, a colour-normalized stone image, or the
+white-isolated SigLIP crop to this model. No new square padding is introduced.
+The checkpoint transforms and application preprocessing match exactly: BGR to RGB,
+PIL bilinear shortest-edge resize to 960, center crop, CHW float32 / 255.
 
-The runtime reads and normalizes class names from ONNX metadata rather than
-assuming the previous three-class indices. Both jewel classes pass the gate;
-empty_testbed and thread_only require recapture. Empty testbed predictions have
-their own rejection message. API overrides and queued jobs cannot bypass a failed
-gate. Legacy three-class ONNX exports remain supported. This classification model
-is separate from the existing thread segmentation model, which remains unchanged.
+Processing order:
 
-## Application scope
+1. Separate objects with the existing Otsu workflow.
+2. Existing anomaly and placement checks; failures stop both classifiers.
+3. Save each native raw item crop and run the v2 thread classifier on EVERY item.
+4. Block the capture if any item is Thread-Only or Empty-Test-Bed.
+5. Require the existing foreground/jewellery-instance verification.
+6. Run SigLIP jewellery-type prediction and existing SOP routing.
 
-Jewellery type prediction now runs BEFORE this provisional model. Only Chain /
-Necklace, Mattal and explicit chain-type aliases use the thread classifier.
-Earrings / Nosepin, Finger Ring, Bangle, generic Bracelet and Other Gold Jewellery
-skip it. Historical chain/necklace, haram, mangalsutra, dollar-chain and kasu-mala
-labels remain supported. A generic Bracelet prediction is not assumed to be a
-chain bracelet, because the category also includes cuffs.
+This supersedes the temporary chain-only restriction. Rings, earrings, bangles,
+Mattal, chains and other separated objects all receive independent thread checks.
+The Thread-Only check runs before foreground verification so a standalone tassel
+can be identified without first requiring it to be a jewellery instance. A positive
+thread-model result does not bypass the foreground checks. API overrides and queued
+jobs cannot bypass a persisted failed gate. Thread segmentation remains unchanged.
 
-Each separated item is routed independently in both single and mixed captures.
-Skipped items store applicable=false and status=skipped; they cannot be rejected
-by this thread model. A failed eligible item still requires recapture of the
-capture. Anomaly and foreground checks continue to apply to every item. The
-seven ring errors in the raw-model audit below are no longer used as application
-thread-gate decisions for items predicted Finger Ring.
+Classes in checkpoint/output order:
 
-Preprocessing matches the checkpoint transforms: RGB PIL bilinear shortest-edge
-resize to 960, center crop, channels first, float32 / 255. The original per-item
-raw-crop inference workflow is preserved.
+- 0 Empty-Test-Bed -> empty_testbed: reject and recapture.
+- 1 Jewel_with_Thread -> jewel_with_thread: allow.
+- 2 Jewel_without_Thread -> jewel_without_thread: allow.
+- 3 Thread-Only -> thread_only: reject and recapture.
 
-## Validation and limitations
+## Verification
 
-On the existing 12 labelled USB review crops, preprocessing matched exactly and
-ONNX probabilities matched PyTorch within 2.384185791015625e-7 absolute error.
-Both thread-only crops were correctly blocked. However, all seven labelled gold
-rings and one other jewellery crop were also labelled thread_only. The two
-jewellery-with-thread crops were labelled jewel_without_thread (still allowed).
-That is 2/12 exact-class matches and 4/12 correct allow/block decisions on this
-curated failure-heavy set; these are NOT population accuracy measurements.
-Synthetic uniform black/grey/white images received jewel labels, so the extra
-empty-testbed output does not guarantee empty-image rejection. Existing anomaly,
-foreground and placement checks still run before this gate.
+59 selected saved dataset crops were compared against PyTorch. Preprocessing was
+identical and maximum probability error was 8.344650268554688e-7. All 59 produced
+the expected allow/block decision; 57/59 matched the supplied class labels. The two
+disagreements were automatically labelled with-thread examples predicted without
+thread; both are still allowed. Both reviewed thread-only crops, all seven reviewed
+rings and all 12 sampled earrings passed their expected checks. The 12 manually
+reviewed seed crops matched all supplied classes.
 
-Regression tests cover class order/name mapping for both model versions, all four
-allow/block decisions, mixed-item rejection, recapture guards and queued-job
-blocking. The frontend production build passes. No live hardware test was run.
-Restart the application after replacing files to load the new model session.
+These examples include training data and automatically suggested labels. This is
+conversion/regression evidence, not an independent accuracy benchmark.
 
-## Re-export and check
+Real saved-session replay used actual object separation, anomaly detection, the
+new ONNX model and the real SigLIP classifier. The large thread-bearing necklace
+20261021_183130_f1d428d0 passed as jewel_with_thread and Chain / Necklace. The six-item
+20261023_115548_2f813fbb capture passed every crop, with jewellery predictions for
+rings, earrings and a bangle. An older earring capture was blocked because its saved
+full-frame testbed mask is missing; no verification guard was bypassed. Two reviewed
+thread-only crops were separately replayed with the real ONNX model and fixture
+crop/anomaly evidence because their original full camera frames are unavailable;
+both were rejected before SigLIP.
 
-Use a development environment with PyTorch, matching Ultralytics 8.4.193, ONNX,
-ONNX Runtime and the application's dependencies:
+93 focused tests passed, covering every class/category, single and multiple crops,
+anomaly/placement ordering, unchanged raw crop pixels, foreground verification,
+recapture guards, stone settings/output and dataset-builder regressions. No live
+camera or physical scale test was performed. Restart the app to load the new session.
+
+Re-export using the development environment and original checkpoint:
 
 ```powershell
-python scripts/export_jewel_thread.py --source "C:\Users\karth\Downloads\jewel-thread-classify-new.pt" --output models/classification/jewel-thread-small.onnx
-python scripts/verify_thread_model_update.py --source "C:\Users\karth\Downloads\jewel-thread-classify-new.pt" --onnx models/classification/jewel-thread-small.onnx --samples-dir "E:\weightScaleinstall\testing\mixed-thread-20261030\review_samples" --output experiments/thread_model_export/verification.json
+experiments/thread_model_export/.venv/Scripts/python.exe scripts/export_jewel_thread.py --source "C:\Users\karth\Downloads\jewel_thread_cls_4class_yolos_960-v2.pt" --output models/classification/jewel-thread-small.onnx
 ```
 
-Backups and detailed verification are under experiments/thread_model_export
-locally, and testing/thread-classifier-update-20261031 on the USB deployment.
+Detailed artifacts and previous local model/source backups are under
+experiments/thread_model_v2_20261102. USB backups and verification are under testing.

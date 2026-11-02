@@ -56,7 +56,7 @@ def service_case(monkeypatch, tmp_path):
     service = AnalysisService(Repository())
     monkeypatch.setattr(service, "_save_classified_evidence", lambda *_a, **_kw: "evidence.jpg")
     monkeypatch.setattr(service, "_get_classifier", lambda: pytest.fail("Must not classify unverified fragments"))
-    monkeypatch.setattr(service, "_get_jewel_thread", lambda: pytest.fail("Presence must run before thread classification"))
+    monkeypatch.setattr(service, "_get_jewel_thread", lambda: SimpleNamespace(classify=lambda _: {"passed": True, "label": "jewel_without_thread"}))
     yield service
     service.shutdown()
 
@@ -64,6 +64,7 @@ def service_case(monkeypatch, tmp_path):
 @pytest.mark.parametrize("label", ["paper", "plastic_packet", "foreign_obj"])
 def test_any_anomaly_blocks_all_categories_even_with_jewellery_evidence(service_case, monkeypatch, label):
     service = service_case
+    monkeypatch.setattr(service, "_get_jewel_thread", lambda: pytest.fail("Anomaly must block the crop classifier"))
     check = evidence(.95, .95)
     check.update(passed=False, detections=[{"label": label, "bbox": {"x": 15,"y":15,"w":80,"h":80}}])
     monkeypatch.setattr(service, "_check_foreign_objects", lambda *_: check)
@@ -150,3 +151,14 @@ def test_public_and_confirmation_paths_cannot_restore_blocked_labels(service_cas
     assert source == service.repository.state
     with pytest.raises(RuntimeError):
         service.confirm_and_start("candidate", "Bangle", True, save_only=True)
+
+
+def test_placement_rejection_runs_before_crop_classifier(service_case, monkeypatch):
+    service = service_case
+    check = evidence(.95, .95)
+    check["placement_check"] = {"passed": False}
+    monkeypatch.setattr(service, "_check_foreign_objects", lambda *_: check)
+    monkeypatch.setattr(service, "_get_jewel_thread", lambda: pytest.fail("Placement must block the crop classifier"))
+    result = service.classify("candidate")
+    assert result["status"] == "rejected"
+    assert result["rejection_kind"] == "placement"

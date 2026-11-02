@@ -30,7 +30,7 @@ from ..analysis.thread_classifier import JewelThreadClassifier, THREAD_ONLY_MESS
 from ..core.config import PROJECT_ROOT, FOREIGN_OBJECT_MODEL_PATH
 from ..domain.bangle_sizes import bangle_size
 from ..domain.ring_sizes import ring_size
-from ..domain.workflow import BEAD_LABELS, label_key, route_for_label, uses_thread_classifier
+from ..domain.workflow import BEAD_LABELS, label_key, route_for_label
 from ..domain.weights import (
     stone_weight_fields,
     stone_estimation_enabled,
@@ -580,13 +580,6 @@ class AnalysisService:
                 "No verified jewellery was found. Keep the jewellery clearly visible and recapture.",
             )
 
-        presence = component_presence_check(check, len(separated))
-        state["component_presence_check"] = presence
-        if not presence["passed"]:
-            # Do not assign a type (or learn a correction) to a shadow/edge simply
-            # because the category classifier must choose a jewellery class.
-            return self._reject_unverified_capture(state, "unverified_foreground", PRESENCE_MESSAGE)
-
         item_dir = self.repository.session_dir(capture_id) / "items"
         item_dir.mkdir(parents=True, exist_ok=True)
         # Preserve every gate input, including rejected captures, for review
@@ -601,6 +594,43 @@ class AnalysisService:
                 if not cv2.imwrite(paths[key], pixels):
                     raise RuntimeError(f"Could not save separated item {index}: {key}")
             item_paths.append(paths)
+        # Every separated raw item crop uses the crop-trained model, after
+        # anomaly/placement checks and before jewellery-type classification.
+        thread_checks = []
+        for index, item in enumerate(separated, 1):
+            result = self._get_jewel_thread().classify(item["raw_crop_bgr"])
+            thread_checks.append({
+                "item_index": index, "bbox": item["bbox"], "paths": item_paths[index - 1],
+                "applicable": True, **result,
+            })
+        state["thread_only_check"] = {
+            "passed": all(item["passed"] for item in thread_checks), "items": thread_checks,
+        }
+        if not state["thread_only_check"]["passed"]:
+            failed = [item for item in thread_checks if not item["passed"]]
+            state["rejection_kind"] = "empty_testbed" if all(item["label"] == "empty_testbed" for item in failed) else "thread_only"
+            state["rejection_reason"] = " ".join(
+                f"Item {item['item_index']}: " + (EMPTY_TESTBED_MESSAGE if item["label"] == "empty_testbed" else THREAD_ONLY_MESSAGE)
+                for item in failed
+            )
+            state["route"] = {}
+            state["result"] = {}
+            state["classification"] = {"count": 0, "items": [], "labels": [],
+                                       "confirmed": False, "predicted_label": "",
+                                       "confirmed_label": None}
+            state["status"] = "rejected"
+            state["updated_at"] = self._now()
+            self.repository.save(state)
+            self._save_rejected_review(state)
+            return state
+
+        presence = component_presence_check(check, len(separated))
+        state["component_presence_check"] = presence
+        if not presence["passed"]:
+            # Do not assign a type (or learn a correction) to a shadow/edge simply
+            # because the category classifier must choose a jewellery class.
+            return self._reject_unverified_capture(state, "unverified_foreground", PRESENCE_MESSAGE)
+
         classifier = self._get_classifier()
         classified_items: list[dict[str, Any]] = []
         for index, separated_item in enumerate(separated, start=1):
@@ -647,6 +677,7 @@ class AnalysisService:
                     "mask": str(mask_path),
                 },
                 "predicted_label": predicted_label,
+                "thread_check": thread_checks[index - 1],
                 "model_label": prediction.model_label,
                 "model_confidence": float(prediction.model_confidence),
                 "decision_source": decision_source,
@@ -672,41 +703,6 @@ class AnalysisService:
                 ],
             })
 
-        # Predict each jewellery type first. The provisional thread model is
-        # only applicable to chain-type items, independently in mixed captures.
-        thread_checks = []
-        for item, separated_item in zip(classified_items, separated):
-            applicable = uses_thread_classifier(item["predicted_label"])
-            check = {
-                "item_index": item["index"], "bbox": item["bbox"], "paths": item["paths"],
-                "jewellery_label": item["predicted_label"], "applicable": applicable,
-            }
-            if applicable:
-                check.update(self._get_jewel_thread().classify(separated_item["raw_crop_bgr"]))
-            else:
-                check.update(passed=True, status="skipped", reason="Thread classifier applies only to chain-type jewellery.")
-            item["thread_check"] = check
-            thread_checks.append(check)
-        state["thread_only_check"] = {
-            "passed": all(item["passed"] for item in thread_checks), "items": thread_checks,
-        }
-        if not state["thread_only_check"]["passed"]:
-            failed = [item for item in thread_checks if not item["passed"]]
-            state["rejection_kind"] = "empty_testbed" if all(item["label"] == "empty_testbed" for item in failed) else "thread_only"
-            state["rejection_reason"] = " ".join(
-                f"Item {item['item_index']}: " + (EMPTY_TESTBED_MESSAGE if item["label"] == "empty_testbed" else THREAD_ONLY_MESSAGE)
-                for item in failed
-            )
-            state["route"] = {}
-            state["result"] = {}
-            state["classification"] = {"count": 0, "items": [], "labels": [],
-                                       "confirmed": False, "predicted_label": "",
-                                       "confirmed_label": None}
-            state["status"] = "rejected"
-            state["updated_at"] = self._now()
-            self.repository.save(state)
-            self._save_rejected_review(state)
-            return state
 
         for item in classified_items:
             if label_key(item["predicted_label"]) == "bangle":

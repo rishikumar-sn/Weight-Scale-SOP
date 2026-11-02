@@ -45,7 +45,9 @@ def main():
         actual = np.array([result['scores'][gate.names[i]] for i in range(len(gate.names))])
         np.testing.assert_allclose(actual, reference, atol=2e-4, rtol=2e-4)
         assert result['label'] == gate.names[int(np.argmax(reference))]
-        expected = path.parent.name if path.parent.name in set(gate.names.values()) else None
+        normalized = path.parent.name.lower().replace('-', '_').replace(' ', '_')
+        normalized = 'empty_testbed' if normalized == 'empty_test_bed' else normalized
+        expected = normalized if normalized in set(gate.names.values()) else None
         row = dict(source=str(path), expected_label=expected, prediction=result,
                    pt_max_absolute_error=float(np.abs(actual-reference).max()), cpu_seconds=round(seconds, 4))
         if expected:

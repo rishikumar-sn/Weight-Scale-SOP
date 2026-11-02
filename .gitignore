@@ -60,3 +60,4 @@ Thumbs.db
 /offline-install-test*/
 /.offline-python/
 # Generated cache; keep foreign_object_prompts.json because the classifier loads it
+/experiment/

@@ -1,5 +1,5 @@
 {
-  "source": "jewel-thread-classify-new.pt",
+  "source": "jewel_thread_cls_4class_yolos_960-v2.pt",
   "onnx": "jewel-thread-small.onnx",
   "imgsz": 960,
   "names": {
@@ -8,8 +8,11 @@
     "2": "Jewel_without_Thread",
     "3": "Thread-Only"
   },
-  "source_sha256": "12c5ce7cc054f2c73f818ce72ac4e9aeab7e3b4287a508d014dbd98d2778945a",
-  "onnx_sha256": "b230061d4727051b9e7a88542f21039f0905183da18492d62390ed4b1413b8b1",
+  "source_sha256": "91dbd1ea56de87ad084fe7c3446ccb3d921558e16a5b65788917cde877d340e2",
+  "onnx_sha256": "6091ef497dcbf05039071966103de2064e9d3a2f474ec26628e29be0cdaeecce",
   "torch_version": "2.13.0+cpu",
+  "ultralytics_checkpoint_version": "8.4.194",
+  "input_source": "raw_item_crop",
+  "preprocessing": "Compose(\n    Resize(size=960, interpolation=bilinear, max_size=None, antialias=True)\n    CenterCrop(size=(960, 960))\n    ToTensor()\n    Normalize(mean=tensor([0., 0., 0.]), std=tensor([1., 1., 1.]))\n)",
   "opset": 17
 }
