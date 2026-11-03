@@ -37,10 +37,11 @@ def component_presence_check(check: dict, component_count: int) -> dict:
 
 def blocks_jewellery_labels(state: dict) -> bool:
     """Also protect legacy captures that retain classifications after rejection."""
+    from .real_print import blocks_real_print
     check = state.get("foreign_object_check") or {}
     foreign = any(str(d.get("label", "")).lower() in {"paper", "plastic_packet", "foreign_obj"}
                   for d in check.get("detections", []))
-    return (foreign or check.get("passed") is False
+    return (blocks_real_print(state) or foreign or check.get("passed") is False
             or (state.get("component_presence_check") or {}).get("passed") is False)
 
 

@@ -21,12 +21,17 @@ from ..analysis.bangle_orientation import detect_bangle_orientation
 from ..analysis.bangle_placement import check_bangle_placement, PLACEMENT_MESSAGE
 from ..analysis.beads import analyze_bead_detections, onnx_image_size, prepare_onnx_input
 from ..analysis.vision import separate_jewellery_items
+from ..analysis.rim_filter import (
+    rim_candidates, remap_component_check, SIGLIP_JEWELLERY_VETO_CONFIDENCE,
+)
 from ..analysis.foreign_objects import ForeignObjectDetector
 from ..analysis.component_presence import (
     component_presence_check, blocks_jewellery_labels, empty_classification, PRESENCE_MESSAGE,
 )
 from ..analysis.thread_segmentation import ThreadSegmenter, project_thread_mask
 from ..analysis.thread_classifier import JewelThreadClassifier, THREAD_ONLY_MESSAGE, EMPTY_TESTBED_MESSAGE
+from ..analysis.real_print import (RealPrintClassifier, blocks_real_print, PRINT_MESSAGE,
+                                   PRINT_REVIEW_MESSAGE, PRINT_UNAVAILABLE_MESSAGE)
 from ..core.config import PROJECT_ROOT, FOREIGN_OBJECT_MODEL_PATH
 from ..domain.bangle_sizes import bangle_size
 from ..domain.ring_sizes import ring_size
@@ -382,6 +387,7 @@ class AnalysisService:
         self._foreign_objects: ForeignObjectDetector | None = None
         self._thread: ThreadSegmenter | None = None
         self._jewel_thread: JewelThreadClassifier | None = None
+        self._real_print: RealPrintClassifier | None = None
         self._active_capture: str | None = None
 
     @staticmethod
@@ -400,6 +406,33 @@ class AnalysisService:
         self._get_beads()
         self._get_foreign_objects()
         self._get_jewel_thread()
+        self._get_real_print()
+
+    def _get_real_print(self) -> RealPrintClassifier:
+        with self._model_lock:
+            if self._real_print is None:
+                self._real_print = RealPrintClassifier(PROJECT_ROOT / 'models/classification/real-print-mobilenetv3.onnx')
+            return self._real_print
+
+    def _check_real_print(self,state: dict,separated: list[dict],item_dir: Path) -> dict:
+        original=cv2.imread(state['paths'].get('original',''))
+        if original is None: raise RuntimeError('Original camera image is unavailable for REAL/PRINT verification')
+        model=self._get_real_print();origin=state['rois']['processing'];checks=[]
+        for index,item in enumerate(separated,1):
+            mask=(item['mask']>0).astype(np.uint8)
+            if not np.any(mask): raise RuntimeError('Empty candidate mask in REAL/PRINT verification')
+            x,y,w,h=cv2.boundingRect(mask);bbox=item['bbox']
+            box=[origin['x']+bbox['x']+x,origin['y']+bbox['y']+y,w,h]
+            views,crop_boxes=model.crops(original,box)
+            paths={}
+            for view,pixels in zip(('tight','context'),views):
+                path=item_dir/f'item_{index:02d}_real_print_{view}.png'
+                if not cv2.imwrite(str(path),pixels): raise RuntimeError('Could not archive REAL/PRINT input crop')
+                paths[view]=str(path)
+            checks.append(dict(item_index=index,bbox=item['bbox'],source_bbox=dict(zip(('x','y','w','h'),box)),
+                crop_boxes=dict(zip(('tight','context'),crop_boxes)),paths=paths,**model.classify(views)))
+        return dict(passed=bool(checks) and all(item['passed'] for item in checks),items=checks,
+                    method='original_pixel_dual_crop_real_print',recapture_only=True)
 
     def _get_jewel_thread(self) -> JewelThreadClassifier:
         with self._model_lock:
@@ -513,10 +546,59 @@ class AnalysisService:
         item["bangle_orientation"] = evidence
         return route_for_label(label, bangle_orientation=evidence["orientation"])
 
+    def _exclude_verified_rim_strips(self, state: dict, separated: list[dict],
+                                    check: dict, testbed_mask: np.ndarray | None) -> tuple[list[dict], dict]:
+        evidence = rim_candidates(separated, check, testbed_mask,
+                                  state.get("calibration"), state.get("testbed"))
+        state["rim_edge_check"] = evidence
+        ignored = set()
+        for record in evidence["items"]:
+            if not record["candidate"]:
+                continue
+            index = record["source_component_index"]
+            raw = separated[index - 1]["raw_crop_bgr"]
+            try:
+                # Category competition alone can call a tray strip a ring.
+                # Strong positive semantics/gallery evidence vetoes exclusion;
+                # weak guesses never override positive instance-mask evidence.
+                classifier = self._get_classifier()
+                image = Image.fromarray(cv2.cvtColor(raw, cv2.COLOR_BGR2RGB))
+                prediction = classifier.classify_image(image)
+                record["semantic_check"] = {
+                    "label": prediction.label, "confidence": float(prediction.confidence),
+                    "gallery_match": bool(prediction.gallery_match),
+                    "is_gold_jewelry": bool(prediction.is_gold_jewelry),
+                }
+                if not np.isfinite(prediction.confidence) or not 0 <= prediction.confidence <= 1:
+                    record["reason"] = "invalid_semantic_confidence_preserved"
+                    continue
+                if prediction.is_gold_jewelry and (
+                    prediction.gallery_match or prediction.confidence >= SIGLIP_JEWELLERY_VETO_CONFIDENCE
+                ):
+                    record["reason"] = "positive_siglip_evidence_preserved"
+                    continue
+            except Exception as exc:
+                record.update(reason="semantic_check_unavailable_preserved", error=str(exc))
+                continue
+            record.update(ignored=True, reason="verified_outer_rim_strip")
+            ignored.add(index)
+        evidence["ignored_component_indices"] = sorted(ignored)
+        if not ignored:
+            return separated, check
+        retained = [index for index in range(1, len(separated) + 1) if index not in ignored]
+        return ([separated[index - 1] for index in retained],
+                remap_component_check(check, retained))
+
     def classify(self, capture_id: str) -> dict[str, Any]:
         state = self.repository.get(capture_id)
         if not state:
             raise KeyError(capture_id)
+        if blocks_real_print(state):
+            # A detected print/review failure is latched to this capture.
+            # Reclassification and correction cannot restore acceptance.
+            return self._reject_unverified_capture(state,state.get('rejection_kind') or 'print_detected',
+                state.get('rejection_reason') or PRINT_MESSAGE)
+        state.pop("rim_edge_check", None)
         image = cv2.imread(state["paths"]["working"])
         mask = cv2.imread(state["paths"]["mask"], cv2.IMREAD_GRAYSCALE)
         if image is None or mask is None:
@@ -573,6 +655,11 @@ class AnalysisService:
             self.repository.save(state)
             self._save_rejected_review(state)
             return state
+        # Explicit anomalies/placement remain authoritative and return above.
+        # Exclude proven rim strips before thread/type classification. The
+        # supported jewellery crops/masks are returned byte-for-byte unchanged.
+        separated, check = self._exclude_verified_rim_strips(state, separated, check, valid_area_mask)
+        state["foreign_object_check"] = check
         if not separated:
             state["component_presence_check"] = component_presence_check(check, 0)
             return self._reject_unverified_capture(
@@ -625,11 +712,26 @@ class AnalysisService:
             return state
 
         presence = component_presence_check(check, len(separated))
+        for item in presence["items"]:
+            retained_sources = check.get("retained_source_component_indices")
+            if retained_sources:
+                item["original_component_index"] = retained_sources[item["source_component_index"] - 1]
         state["component_presence_check"] = presence
         if not presence["passed"]:
             # Do not assign a type (or learn a correction) to a shadow/edge simply
             # because the category classifier must choose a jewellery class.
             return self._reject_unverified_capture(state, "unverified_foreground", PRESENCE_MESSAGE)
+
+        try:
+            print_check=self._check_real_print(state,separated,item_dir)
+        except Exception as exc:
+            state['real_print_check']=dict(passed=False,items=[],error=str(exc),recapture_only=True)
+            return self._reject_unverified_capture(state,'real_print_unavailable',PRINT_UNAVAILABLE_MESSAGE)
+        state['real_print_check']=print_check
+        if not print_check['passed']:
+            printed=any(item.get('label')=='PRINT' for item in print_check['items'])
+            return self._reject_unverified_capture(state,'print_detected' if printed else 'real_print_review',
+                PRINT_MESSAGE if printed else PRINT_REVIEW_MESSAGE)
 
         classifier = self._get_classifier()
         classified_items: list[dict[str, Any]] = []
@@ -678,6 +780,7 @@ class AnalysisService:
                 },
                 "predicted_label": predicted_label,
                 "thread_check": thread_checks[index - 1],
+                "real_print_check": print_check['items'][index - 1],
                 "model_label": prediction.model_label,
                 "model_confidence": float(prediction.model_confidence),
                 "decision_source": decision_source,
@@ -953,6 +1056,9 @@ class AnalysisService:
 
     def public_state(self, state: dict[str, Any]) -> dict[str, Any]:
         payload = json.loads(json.dumps(state))
+        if blocks_real_print(payload):
+            payload.setdefault('rejection_kind','print_detected')
+            payload.setdefault('rejection_reason',PRINT_MESSAGE)
         if blocks_jewellery_labels(payload):
             payload.update(classification=empty_classification(), route={}, result={}, status="rejected")
             payload.setdefault("rejection_reason", "Remove the other objects and recapture.")
@@ -1298,7 +1404,7 @@ class AnalysisService:
         state = self.repository.get(capture_id)
         if not state:
             return
-        if state.get("status") == "rejected" or (state.get("thread_only_check") or {}).get("passed") is False:
+        if blocks_real_print(state) or state.get("status") == "rejected" or (state.get("thread_only_check") or {}).get("passed") is False:
             return
         try:
             classified_items = (state.get("classification") or {}).get("items") or []

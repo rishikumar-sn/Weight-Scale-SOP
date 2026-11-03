@@ -32,6 +32,7 @@ def main():
     SiglipImageProcessor.from_pretrained(str(model_root), local_files_only=True)
     Siglip2Tokenizer.from_pretrained(str(model_root), local_files_only=True)
     paths = ["models/classification/jewel-thread-small.onnx",
+             "models/classification/real-print-mobilenetv3.onnx",
              "models/detection/bead_finder.onnx", "models/detection/beadfinder_old.onnx",
              "models/packet/barcodescanner.onnx",
              "models/segmentation/testbed.onnx", "models/segmentation/essaetestbed.onnx",
@@ -44,6 +45,12 @@ def main():
         session = ort.InferenceSession(str(ROOT / relative), sess_options=options, providers=["CPUExecutionProvider"])
         print("ONNX loaded on CPU:", relative, flush=True)
         del session
+    from backend.app.analysis.real_print import RealPrintClassifier
+    real_print=RealPrintClassifier(ROOT/'models/classification/real-print-mobilenetv3.onnx')
+    result=real_print.classify([np.full((100,120,3),180,np.uint8)]*2)
+    assert result['label'] in {'REAL','PRINT','REVIEW'}
+    print('REAL/PRINT checksum, preprocessing and CPU inference verified:',result['label'],flush=True)
+    del real_print
     from Classification.siglip384_classifier import Siglip384Classifier
     classifier = Siglip384Classifier()
     sample = np.full((384, 384, 3), 255, dtype=np.uint8)

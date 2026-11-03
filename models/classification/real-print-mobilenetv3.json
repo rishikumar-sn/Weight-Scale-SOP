@@ -1,0 +1,39 @@
+{
+  "format": "real-print-v1",
+  "labels": [
+    "REAL",
+    "PRINT"
+  ],
+  "image_size": 224,
+  "batch_order": [
+    "tight",
+    "context"
+  ],
+  "mean": [
+    0.485,
+    0.456,
+    0.406
+  ],
+  "std": [
+    0.229,
+    0.224,
+    0.225
+  ],
+  "tight_padding": 0.1,
+  "context_padding": 0.4,
+  "fusion_weight": 0.0,
+  "threshold": 0.5,
+  "uncertainty_half_band": 0.05,
+  "resize": "PIL bilinear letterbox; RGB; fill 240",
+  "sha256": "19293fba835db064bee1aeeeab253ca504250f8e467951d142488cb7bc2d25ee",
+  "source_checkpoint_sha256": "6c0c916d6f4d001e053ca64ebc6bcf13ed181f10569942d96578c294e45210c9",
+  "dataset_version": "confirmed-real-enriched-20261102",
+  "best_epoch": 6,
+  "evaluation": {
+    "held_out_real": 21,
+    "held_out_print": 15,
+    "correct_real": 21,
+    "correct_print": 15,
+    "limitations": "Small held-out set; source identities are inferred; requires broader deployment validation."
+  }
+}

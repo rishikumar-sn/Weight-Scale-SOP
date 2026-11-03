@@ -387,6 +387,7 @@ def test_only_not_gold_predictions_reject_without_review(monkeypatch, tmp_path, 
             {"component_overlaps": [{"component_index": 1, "component_share": .95}]}],
     })
     monkeypatch.setattr(service, "_get_jewel_thread", lambda: SimpleNamespace(classify=lambda _: {"passed": True}))
+    monkeypatch.setattr(service,'_check_real_print',lambda _state,items,_dir:{'passed':True,'items':[{'passed':True,'label':'REAL'} for _ in items]})
     monkeypatch.setattr(service, "_save_classified_evidence", lambda *_a, **_kw: pytest.fail("No classified preview"))
     monkeypatch.setattr(service, "_save_rejected_review", lambda *_a: None)
     try:

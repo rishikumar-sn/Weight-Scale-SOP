@@ -328,6 +328,15 @@ def render_capture_review(image: np.ndarray, state: dict, items: list[dict], *,
             label_box(photo, box, f"J{index}", occupied=occupied)
             bounds.append(box)
     anomaly_locations = []
+    for number,check in enumerate((state.get('real_print_check') or {}).get('items') or [],1):
+        if check.get('passed') is True:
+            continue
+        bbox=check.get('source_bbox') or {}
+        if bbox.get('w',0)<=0 or bbox.get('h',0)<=0:
+            continue
+        x,y=bbox['x'],bbox['y'];box=(x,y,x+bbox['w'],y+bbox['h'])
+        label_box(photo,box,f"P{number}: {check.get('label','REVIEW')}",color=(75,61,198),occupied=occupied)
+        bounds.append(box)
     for number, detection in enumerate((state.get("foreign_object_check") or {}).get("detections") or [], 1):
         if str(detection.get("label", "")).casefold() in {"jewellery", "jewelry", "jewel"}:
             continue

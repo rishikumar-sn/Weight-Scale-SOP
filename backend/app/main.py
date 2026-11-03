@@ -87,8 +87,8 @@ def _artifact_urls(state: dict[str, Any]) -> dict[str, Any]:
         "beads": url_for((result.get("beads") or {}).get("image")),
         "stones": url_for((result.get("stones") or {}).get("image")),
         "items": item_media,
-        "pdf": f"/api/captures/{capture_id}/report.pdf" if state.get("status") == "complete" else None,
-        "result_image": f"/api/captures/{capture_id}/result.png" if state.get("status") == "complete" else None,
+        "pdf": f"/api/captures/{capture_id}/report.pdf" if state.get("status") == "complete" and not blocks_jewellery_labels(state) else None,
+        "result_image": f"/api/captures/{capture_id}/result.png" if state.get("status") == "complete" and not blocks_jewellery_labels(state) else None,
     }
 
 
@@ -351,6 +351,8 @@ def artifact(capture_id: str, relative_path: str):
         raise HTTPException(status_code=404, detail="File not found")
     state = repository.get(capture_id)
     if state and blocks_jewellery_labels(state):
+        if target.relative_to(base).parts[0] == 'results':
+            raise HTTPException(status_code=409, detail='Analysis is blocked; recapture.')
         evidence = (state.get("paths") or {}).get("evidence")
         if target.name == "classified_evidence.jpg" or (evidence and target == Path(evidence).resolve()):
             # Render old rejected evidence from untouched pixels, without rewriting history.
@@ -371,7 +373,7 @@ def artifact(capture_id: str, relative_path: str):
 @app.get("/api/captures/{capture_id}/report.pdf")
 def report(capture_id: str):
     state = _state(capture_id)
-    if state.get("status") != "complete":
+    if blocks_jewellery_labels(state) or state.get("status") != "complete":
         raise HTTPException(status_code=409, detail="Results are not ready")
     return StreamingResponse(
         reports.generate(state),
@@ -386,7 +388,7 @@ def report(capture_id: str):
 @app.get("/api/captures/{capture_id}/result.png")
 def result_image(capture_id: str, download: bool = False):
     state = _state(capture_id)
-    if state.get("status") != "complete":
+    if blocks_jewellery_labels(state) or state.get("status") != "complete":
         raise HTTPException(status_code=409, detail="Results are not ready")
     disposition = "attachment" if download else "inline"
     if state.get("capture_type") == "tare":

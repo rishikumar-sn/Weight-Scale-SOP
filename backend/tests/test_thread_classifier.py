@@ -53,6 +53,7 @@ def test_new_model_workflow_preserves_recapture_guards(tmp_path,monkeypatch,labe
         def save(self,state): self.state=deepcopy(state);return deepcopy(state)
         def session_dir(self,_): return tmp_path
     repository=Repository();service=AnalysisService(repository)
+    monkeypatch.setattr(service,'_check_real_print',lambda _state,items,_dir:{'passed':True,'items':[{'passed':True,'label':'REAL'} for _ in items]})
     raw_crop=image[10:70,20:100].copy()
     component={'bbox':{'x':20,'y':10,'w':80,'h':60},'area_px':4800,'crop_bgr':np.full_like(raw_crop,255),'raw_crop_bgr':raw_crop,'mask':np.ones((60,80),np.uint8)}
     monkeypatch.setattr('backend.app.services.analysis_service.separate_jewellery_items',lambda *args,**kwargs:[component]*len(labels))

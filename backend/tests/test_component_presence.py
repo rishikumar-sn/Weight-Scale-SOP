@@ -54,6 +54,7 @@ def service_case(monkeypatch, tmp_path):
         def session_dir(self, _id): return tmp_path
 
     service = AnalysisService(Repository())
+    monkeypatch.setattr(service,'_check_real_print',lambda _state,items,_dir:{'passed':True,'items':[{'passed':True,'label':'REAL'} for _ in items]})
     monkeypatch.setattr(service, "_save_classified_evidence", lambda *_a, **_kw: "evidence.jpg")
     monkeypatch.setattr(service, "_get_classifier", lambda: pytest.fail("Must not classify unverified fragments"))
     monkeypatch.setattr(service, "_get_jewel_thread", lambda: SimpleNamespace(classify=lambda _: {"passed": True, "label": "jewel_without_thread"}))

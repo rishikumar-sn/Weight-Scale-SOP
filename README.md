@@ -48,15 +48,41 @@ grams and press its button again.
 
 ## Foreign-object rejection
 
-Jewellery captures first pass the existing per-item non-jewellery checks. When
-every item passes, `models/segmentation/anomolies.onnx` checks the raw camera
+After foreground candidate extraction, `models/segmentation/anomolies.onnx` checks the raw camera
 image for objects mixed with jewellery. Only object segmentation pixels inside
 the detected testbed polygon count. Confidence thresholds are `foreign_obj=0.45`,
-`plastic_packet=0.35`, and `paper=0.25`; the `jewellery` label does not reject a
+`plastic_packet=0.35`, and `paper=0.15`; the `jewellery` label does not reject a
 capture. Any qualifying foreign object blocks confirmation and analysis and
 shows a recapture-only screen. Missing models or capture masks block the check
 rather than allowing an unchecked capture through. The model runs on CPU and is
 loaded once on its first eligible capture.
+
+## Printed-jewellery rejection
+
+New jewellery captures now run the bundled CPU REAL/PRINT classifier after
+anomaly, placement, thread/empty and foreground-support checks, and before
+SigLIP jewellery-type classification. Each candidate supplies a tight crop
+(10% padding) and context crop (40%) taken from the original camera pixels.
+The classifier uses the same RGB letterbox/normalization as its training lab;
+masked white-background cutouts are not its inputs.
+
+If **any item is PRINT**, the entire capture is rejected. The operator sees
+**Printed jewellery detected — recapture required**, the affected region and
+only the Recapture action. Confirmation, corrections, gallery learning and
+analysis cannot override that rejection. Mixed REAL/PRINT scenes are also
+rejected. Uncertain predictions and unavailable/invalid verification require
+recapture as well. Camera/scale capture controls, including ACCET's physical
+scale button, retain their existing behavior.
+
+The deployed assets are `models/classification/real-print-mobilenetv3.onnx`
+and its `.json` metadata/checksum. No production import depends on
+`experiment/`, torchvision or an external model download. The 224-pixel
+MobileNetV3-Large checkpoint was trained on the reviewed enriched dataset;
+validation selected 100% context weighting. Its initial 36-sample held-out
+result was 21/21 REAL and 15/15 PRINT, with inferred source identities and
+limited print-source variety. This is an initial model result rather than an
+authenticity or material-purity guarantee. See [REAL_PRINT_INTEGRATION.md](REAL_PRINT_INTEGRATION.md)
+for runtime policy, deployment and verification.
 
 ## First-time Windows setup
 

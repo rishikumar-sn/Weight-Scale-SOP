@@ -169,6 +169,16 @@ select { width: 100%; height: 46px; padding: 0 12px; border: 1px solid var(--lin
 .itemNumber { display: grid; place-items: center; width: 38px; height: 38px; flex: none; border-radius: 10px; background: var(--gold-dark); color: white; font-weight: 800; }
 .completeBadge { padding: 6px 9px; border-radius: 99px; background: #e8f6f0; color: var(--green); font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; }
 .summaryGrid.compact { margin: 14px 0; }
+.itemResultCard .summaryGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.itemResultCard .summaryGrid > div { min-width: 0; background: #fff; overflow-wrap: anywhere; }
+.itemResultCard .summaryGrid strong { line-height: 1.4; font-variant-numeric: tabular-nums; }
+.itemResultCard .summaryGrid .riskHIGH { background: #fff0f1; }
+.itemResultCard .summaryGrid .riskMEDIUM { background: #fff8e8; }
+.itemResultCard .summaryGrid .riskNONE { background: #eef9f4; }
+.resultInsight h4 { margin: 0 0 8px; color: var(--gold-dark); font-size: 13px; font-weight: 700; }
+.resultInsight p { margin: 0; font-size: 14px; line-height: 1.65; }
+.resultInsight .resultExplanation { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.6; }
+
 .itemWarning { padding: 9px 11px; border-radius: 8px; background: #fff0f1; color: #922e36; font-size: 12px; overflow-wrap: anywhere; }
 .resultActions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 20px; }
 .linkButton { display: grid; place-items: center; text-decoration: none; }
@@ -227,7 +237,7 @@ footer { padding: 0 64px 18px; text-align: right; color: var(--muted); font-size
   .roiTools > div:first-child { grid-column: auto; }
   .primary.small { width: 100%; }
   .deviceStrip { flex-direction: column; }
-  .summaryGrid, .resultActions { grid-template-columns: 1fr; }
+  .summaryGrid, .itemResultCard .summaryGrid, .resultActions { grid-template-columns: 1fr; }
   .summaryGrid > div.wide { grid-column: auto; }
   .resultsHeading { align-items: stretch; flex-direction: column; }
   .resultsHeadingAside { flex-direction: column; }

@@ -899,7 +899,7 @@ export default function App() {
             {captureTab === "jewellery" && stage === "rejected" && (
               <div className="rejectedReview">
                 <span className="eyebrow errorText">Recapture required</span>
-                <h2>{active?.rejection_kind === "unverified_foreground" || active?.rejection_kind === "verification_unavailable" ? "Check the capture and recapture" : active?.rejection_kind === "empty_testbed" ? "Place jewellery and recapture" : active?.rejection_kind === "thread_only" ? "Thread or tassel without a jewel detected" : active?.rejection_kind === "placement" ? "Separate the jewellery and recapture" : "Other objects detected with jewellery"}</h2>
+                <h2>{active?.rejection_kind === "print_detected" ? "Printed jewellery detected — recapture required" : active?.rejection_kind === "real_print_review" || active?.rejection_kind === "real_print_unavailable" || active?.rejection_kind === "unverified_foreground" || active?.rejection_kind === "verification_unavailable" ? "Check the capture and recapture" : active?.rejection_kind === "empty_testbed" ? "Place jewellery and recapture" : active?.rejection_kind === "thread_only" ? "Thread or tassel without a jewel detected" : active?.rejection_kind === "placement" ? "Separate the jewellery and recapture" : "Other objects detected with jewellery"}</h2>
                 <p role="alert">{active?.rejection_reason}</p>
                 <ResultImage src={media.evidence} alt="Capture requiring recapture" label="Captured evidence" />
                 <button className="primary" onClick={recapture} disabled={busy || !cameraReady || !live.scale?.connected || (!scaleButtonCapture && !rois.apriltag)}>
@@ -1043,12 +1043,17 @@ export default function App() {
                           {item.dimensions?.bangle_size?.label && <div className="wide"><span>Size basis</span><strong>Nearest listed size by inner diameter ({item.dimensions.bangle_size.reference_diameter_mm} mm reference)</strong></div>}
                           {item.beads && <div><span>Bead analysis</span><strong>{item.beads.beads_detected ? "Beads detected" : "Beads not detected"}</strong></div>}
                           {item.beads && <div><span>Bead count</span><strong>{item.beads.count ?? item.beads.detections?.length ?? "Unavailable"}</strong></div>}
-                          {item.beads?.summary && <div className="wide"><span>Bead insights</span><strong>{item.beads.summary}</strong></div>}
-                          {item.stones?.summary && <div className="wide"><span>Stone insights</span><strong>{item.stones.summary}</strong></div>}
-                          {item.stones?.color_note && <p className="wide">{item.stones.color_note}</p>}
                           {item.stones?.thread && <div><span>Thread analysis</span><strong>{item.stones.thread.status}</strong></div>}
                           {item.stones?.stone_area_mm2 != null && <div><span>Detected stone area</span><strong>{Number(item.stones.stone_area_mm2).toFixed(2)} mm²</strong></div>}
                           {item.stones && <div className={`wide riskTag risk${item.stones.risk_level || "NONE"}`}><span>Stone analysis</span><strong>{({ HIGH: "High stones region", MEDIUM: "Medium stones", LOW: "Low stones", NONE: "No stones" } as Record<string, string>)[item.stones.risk_level || "NONE"] || "No stones"}</strong></div>}
+                          {item.beads?.summary && <div className="wide resultInsight"><h4>Bead insights</h4><p>{item.beads.summary}</p></div>}
+                          {(item.stones?.summary || item.stones?.color_note) && (
+                            <div className="wide resultInsight">
+                              <h4>Stone insights</h4>
+                              {item.stones.summary && <p>{item.stones.summary}</p>}
+                              {item.stones.color_note && <p className="resultExplanation">{item.stones.color_note}</p>}
+                            </div>
+                          )}
                         </div>
                         {(item.errors || []).map((warning: any) => <p className="itemWarning" key={warning.stage}>{warning.stage}: {warning.message}</p>)}
                         <div className="resultGallery">

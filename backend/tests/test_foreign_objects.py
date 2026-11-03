@@ -102,6 +102,7 @@ def capture_service(monkeypatch, tmp_path):
                      crop_bgr=working, raw_crop_bgr=working, mask=np.ones((80, 80), np.uint8))
     monkeypatch.setattr("backend.app.services.analysis_service.separate_jewellery_items", lambda *_a, **_kw: [separated])
     service = AnalysisService(Repository())
+    monkeypatch.setattr(service,'_check_real_print',lambda _state,items,_dir:{'passed':True,'items':[{'passed':True,'label':'REAL'} for _ in items]})
     monkeypatch.setattr(service, "_get_classifier", lambda: Classifier())
     monkeypatch.setattr(service, "_get_jewel_thread", lambda: SimpleNamespace(classify=lambda _: {"passed": True}))
     monkeypatch.setattr(service, "_save_classified_evidence", lambda *_a, **_kw: "review.jpg")

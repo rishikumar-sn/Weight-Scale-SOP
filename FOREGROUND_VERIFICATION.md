@@ -2,6 +2,13 @@
 
 ## Implemented behavior
 
+**2 November update:** the calibrated [tray-rim filter](RIM_EDGE_FILTER.md)
+can exclude unsupported neutral thin strips along the detected outer testbed
+boundary before the per-item thread/presence/type gates. Explicit anomalies,
+interior components and jewellery-supported pixels remain protected. The
+requirements below apply to retained components. Every exclusion is recorded
+as `rim_edge_check`; historical sessions are not rewritten.
+
 Otsu connected components are proposals, not confirmed jewellery identities.
 Before thread classification, SigLIP, dimension fallback or gallery learning,
 each component must have at least **20% of its foreground pixels supported by
