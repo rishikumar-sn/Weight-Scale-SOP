@@ -18,7 +18,7 @@ from .core.config import (
     SESSIONS_DIR,
     SettingsStore,
 )
-from .domain.schemas import CameraFlickerSettings, CameraRotationSettings, ClassificationConfirmation, RoiSettings, ScaleSettings, StoneAnalysisSettings, TareCaptureRequest
+from .domain.schemas import CameraFlickerSettings, CameraRotationSettings, ClassificationConfirmation, RoiSettings, ScaleSettings, ModelSettings, StoneAnalysisSettings, TareCaptureRequest
 from .domain.workflow import class_labels
 from .hardware.camera import CameraService
 from .hardware.scale import ScaleService
@@ -102,7 +102,7 @@ def _public_capture(state: dict[str, Any]) -> dict[str, Any]:
 async def lifespan(_: FastAPI):
     repository.start_run()
     try:
-        analysis.preload_models()
+        analysis.preload_models(settings_store.get())
         try:
             captures.packet_scanner.preload()
             logger.info("Packet detector and OCR are ready")
@@ -223,6 +223,11 @@ def save_camera_flicker(payload: CameraFlickerSettings):
 @app.put("/api/settings/stone-analysis")
 def set_stone_analysis(payload: StoneAnalysisSettings):
     return {"settings": settings_store.update({"stone_analysis": payload.model_dump()})}
+
+
+@app.put("/api/settings/models")
+def set_models(payload: ModelSettings):
+    return {"settings": settings_store.update({"models": payload.model_dump()})}
 
 
 @app.put("/api/settings/scale")

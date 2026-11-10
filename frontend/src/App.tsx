@@ -6,6 +6,17 @@ type CaptureTab = "jewellery" | "tare";
 type TareMode = "pledge" | "release";
 type CaptureState = Record<string, any>;
 
+const CAPTURE_MODELS = [
+  ["foreign_objects", "Anomaly / foreign-object model", "Detect paper, packets, other objects and overlapping jewellery. Disabling also bypasses foreground verification and rim filtering, which need this model's masks."],
+  ["component_presence", "Foreground verification", "Require anomaly-model jewellery evidence for each foreground region."],
+  ["rim_filter", "Tray-rim filter", "Use geometry and jewellery classification to exclude verified tray-edge strips."],
+  ["thread_only", "Thread-only / empty-testbed model", "Reject loose thread, tassels and empty-testbed crops."],
+  ["real_print", "Real / printed jewellery model", "Reject printed jewellery and uncertain real/print predictions."],
+  ["semantic_validation", "Non-jewellery semantic check", "Check raw crops for non-jewellery before type classification. Type classification still runs."],
+  ["bangle_placement", "Bangle placement check", "Check bangle opening geometry during classification, confirmation and analysis."],
+  ["thread_segmentation", "Thread segmentation model", "Exclude segmented thread pixels from stone analysis on applicable jewellery."],
+];
+
 const FLICKER_METHODS = [
   ["driver", "Current shutter / driver", "Keep the station’s existing calibrated camera settings."],
   ["adaptive", "Adaptive shutter", "Set exposure and a short average once when applied, then keep those settings until you apply again. Linux V4L2."],
@@ -93,8 +104,9 @@ export default function App() {
   const [message, setMessage] = useState("Place the jewellery and check the weight.");
   const [error, setError] = useState("");
   const [setupOpen, setSetupOpen] = useState(false);
-  const [settingsSection, setSettingsSection] = useState<"flicker" | "areas" | "rotation" | "scale" | "stones">("flicker");
+  const [settingsSection, setSettingsSection] = useState<"flicker" | "areas" | "rotation" | "scale" | "stones" | "models">("flicker");
   const [flickerMode, setFlickerMode] = useState("driver");
+  const [modelDraft, setModelDraft] = useState<Record<string, boolean>>({});
   const [stoneWeightEnabled, setStoneWeightEnabled] = useState(false);
   const [scaleModel, setScaleModel] = useState("embsys_wm");
   const [cameraRotation, setCameraRotation] = useState(-90);
@@ -179,6 +191,7 @@ export default function App() {
       setHardwarePlatform(data.platform);
       setFlickerMode(data.settings.camera.anti_flicker_mode);
       setScaleModel(data.settings.scale.model || "embsys_wm");
+      setModelDraft(data.settings.models || {});
       setStoneWeightEnabled(data.settings.stone_analysis?.enable_weight_estimation ?? false);
       setCameraRotation(data.settings.camera.rotation % 360 === 90 ? 90 : -90);
       setLabels(data.labels || []);
@@ -356,6 +369,7 @@ export default function App() {
       setFlickerMode(settings?.camera?.anti_flicker_mode || "driver");
       setCameraRotation(settings?.camera?.rotation % 360 === 90 ? 90 : -90);
       setScaleModel(settings?.scale?.model || "embsys_wm");
+      setModelDraft(settings?.models || {});
       setStoneWeightEnabled(settings?.stone_analysis?.enable_weight_estimation ?? false);
       setDraftRois(rois);
       setSettingsNotice("");
@@ -646,6 +660,19 @@ export default function App() {
     void task.finally(() => { scaleCaptureBusyRef.current = false; });
   }, [live.scale?.capture_event_id, scaleButtonCapture]);
 
+  async function saveModels() {
+    setSettingsSaving(true);
+    setSettingsNotice("");
+    try {
+      const models = Object.fromEntries(CAPTURE_MODELS.map(([key]) => [key, modelDraft[key] ?? true]));
+      const data = await requestJson("/api/settings/models", { method: "PUT", body: JSON.stringify(models) });
+      setSettings(data.settings);
+      setModelDraft(data.settings.models);
+      setSettingsNotice("Models applied. The next capture uses these settings immediately; no restart needed.");
+    } catch (err: any) { setSettingsNotice(err.message || "Unable to apply model settings."); }
+    finally { setSettingsSaving(false); }
+  }
+
   async function saveStoneAnalysis() {
     setSettingsSaving(true);
     setSettingsNotice("");
@@ -788,6 +815,7 @@ export default function App() {
                 <button aria-current={settingsSection === "rotation" ? "page" : undefined} onClick={() => { setSettingsSection("rotation"); setDrawingTarget(null); dragRef.current = null; setSettingsNotice(""); }}>Camera rotation</button>
                 <button aria-current={settingsSection === "scale" ? "page" : undefined} onClick={() => { setSettingsSection("scale"); setDrawingTarget(null); dragRef.current = null; setSettingsNotice(""); }}>Weight scale</button>
                 <button aria-current={settingsSection === "stones" ? "page" : undefined} onClick={() => { setSettingsSection("stones"); setDrawingTarget(null); dragRef.current = null; setSettingsNotice(""); }}>Stone analysis</button>
+                <button aria-current={settingsSection === "models" ? "page" : undefined} onClick={() => { setSettingsSection("models"); setDrawingTarget(null); dragRef.current = null; setSettingsNotice(""); }}>Models</button>
               </nav>
               <div className="settingsContent">
                 {!settings ? <p role="status">Loading settings…</p> : settingsSection === "flicker" ? <>
@@ -820,6 +848,19 @@ export default function App() {
                   <label><input type="checkbox" checked={stoneWeightEnabled} disabled={settingsSaving} onChange={event => { setStoneWeightEnabled(event.target.checked); setSettingsNotice(""); }} /> Enable stone weight estimation</label>
                   <p>Show estimated stone and net weights for single-jewel captures. Applies to every weight scale. When disabled, only the captured scale weight is printed. Color, count and size analysis continues.</p>
                   <button className="primary" disabled={settingsSaving || busy || stage === "processing"} onClick={saveStoneAnalysis}>{settingsSaving ? "Saving..." : "Save stone analysis"}</button>
+                </> : settingsSection === "models" ? <>
+                  <h3>Models</h3>
+                  <p>Enable or disable capture checks, then apply. Changes take effect on the next capture across every scale. Captures already taken keep their saved settings; recapture to use your changes.</p>
+                  <div className="modelSettingsList">
+                    {CAPTURE_MODELS.map(([key, label, description]) => <div className="modelSetting" key={key}>
+                      <label><input type="checkbox" checked={modelDraft[key] ?? true} disabled={settingsSaving} onChange={event => { setModelDraft(current => ({ ...current, [key]: event.target.checked })); setSettingsNotice(""); }} /> {label}</label>
+                      <span className="modelSettingState">{modelDraft[key] === false ? "Disabled" : "Enabled"}</span>
+                      <p>{description}</p>
+                      {["component_presence", "rim_filter"].includes(key) && modelDraft.foreign_objects === false && <p className="methodDescription">Bypassed while the anomaly model is disabled.</p>}
+                    </div>)}
+                  </div>
+                  <p>Testbed detection, AprilTag calibration, jewellery type classification, bead detection and stone/dimension analysis continue as required by the workflow.</p>
+                  <button className="primary" disabled={settingsSaving} onClick={saveModels}>{settingsSaving ? "Applying..." : "Apply models"}</button>
                 </> : settingsSection === "rotation" ? <>
                   <h3>Camera rotation</h3>
                   <p>Choose the camera orientation. Both options keep the full-resolution image at 1080 × 1920.</p>

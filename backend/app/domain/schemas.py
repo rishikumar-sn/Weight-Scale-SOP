@@ -66,3 +66,16 @@ class ScaleSettings(BaseModel):
 
 class StoneAnalysisSettings(BaseModel):
     enable_weight_estimation: bool
+
+
+class ModelSettings(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    foreign_objects: bool = True
+    component_presence: bool = True
+    rim_filter: bool = True
+    thread_only: bool = True
+    real_print: bool = True
+    semantic_validation: bool = True
+    bangle_placement: bool = True
+    thread_segmentation: bool = True

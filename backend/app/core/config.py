@@ -64,6 +64,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "width_mm": 10.0,
         "height_mm": 10.0,
     },
+    "models": {key: True for key in (
+        "foreign_objects", "component_presence", "rim_filter", "thread_only",
+        "real_print", "semantic_validation", "bangle_placement", "thread_segmentation",
+    )},
     "stone_analysis": {"enable_weight_estimation": False},
     "analysis": {
         "item_separation": {

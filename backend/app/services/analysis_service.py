@@ -400,13 +400,24 @@ class AnalysisService:
         # not started, so Python does not exit underneath a native worker.
         self._executor.shutdown(wait=True, cancel_futures=True)
 
-    def preload_models(self) -> None:
+    @staticmethod
+    def _model_enabled(state: dict, key: str) -> bool:
+        return (state.get("settings_snapshot", {}).get("models") or {}).get(key, True)
+
+    @staticmethod
+    def _skipped_check(reason: str = "disabled_in_settings") -> dict:
+        return {"passed": True, "skipped": True, "method": reason, "items": []}
+
+    def preload_models(self, settings: dict | None = None) -> None:
         """Load all analysis gates before accepting captures."""
         self._get_classifier()
         self._get_beads()
-        self._get_foreign_objects()
-        self._get_jewel_thread()
-        self._get_real_print()
+        state = {"settings_snapshot": settings or {}}
+        for key, load in (("foreign_objects", self._get_foreign_objects),
+                          ("thread_only", self._get_jewel_thread),
+                          ("real_print", self._get_real_print)):
+            if self._model_enabled(state, key):
+                load()
 
     def _get_real_print(self) -> RealPrintClassifier:
         with self._model_lock:
@@ -617,7 +628,8 @@ class AnalysisService:
             valid_area_mask=valid_area_mask,
         )
         try:
-            check = self._check_foreign_objects(state, separated)
+            check = (self._check_foreign_objects(state, separated)
+                     if self._model_enabled(state, "foreign_objects") else self._skipped_check())
         except Exception as exc:
             # A retry must not retain old classifications when verification fails.
             state["foreign_object_check"] = {"passed": False, "detections": [],
@@ -658,7 +670,10 @@ class AnalysisService:
         # Explicit anomalies/placement remain authoritative and return above.
         # Exclude proven rim strips before thread/type classification. The
         # supported jewellery crops/masks are returned byte-for-byte unchanged.
-        separated, check = self._exclude_verified_rim_strips(state, separated, check, valid_area_mask)
+        if self._model_enabled(state, "rim_filter") and not check.get("skipped"):
+            separated, check = self._exclude_verified_rim_strips(state, separated, check, valid_area_mask)
+        else:
+            state["rim_edge_check"] = self._skipped_check()
         state["foreign_object_check"] = check
         if not separated:
             state["component_presence_check"] = component_presence_check(check, 0)
@@ -685,13 +700,15 @@ class AnalysisService:
         # anomaly/placement checks and before jewellery-type classification.
         thread_checks = []
         for index, item in enumerate(separated, 1):
-            result = self._get_jewel_thread().classify(item["raw_crop_bgr"])
+            result = (self._get_jewel_thread().classify(item["raw_crop_bgr"])
+                      if self._model_enabled(state, "thread_only") else self._skipped_check())
             thread_checks.append({
                 "item_index": index, "bbox": item["bbox"], "paths": item_paths[index - 1],
                 "applicable": True, **result,
             })
         state["thread_only_check"] = {
             "passed": all(item["passed"] for item in thread_checks), "items": thread_checks,
+            "skipped": not self._model_enabled(state, "thread_only"),
         }
         if not state["thread_only_check"]["passed"]:
             failed = [item for item in thread_checks if not item["passed"]]
@@ -711,7 +728,9 @@ class AnalysisService:
             self._save_rejected_review(state)
             return state
 
-        presence = component_presence_check(check, len(separated))
+        presence = (component_presence_check(check, len(separated))
+                    if self._model_enabled(state, "component_presence") and not check.get("skipped")
+                    else self._skipped_check("anomaly_model_disabled" if check.get("skipped") else "disabled_in_settings"))
         for item in presence["items"]:
             retained_sources = check.get("retained_source_component_indices")
             if retained_sources:
@@ -723,7 +742,11 @@ class AnalysisService:
             return self._reject_unverified_capture(state, "unverified_foreground", PRESENCE_MESSAGE)
 
         try:
-            print_check=self._check_real_print(state,separated,item_dir)
+            print_check = (self._check_real_print(state,separated,item_dir)
+                           if self._model_enabled(state, "real_print") else {
+                               **self._skipped_check(),
+                               "items": [self._skipped_check() for _ in separated],
+                           })
         except Exception as exc:
             state['real_print_check']=dict(passed=False,items=[],error=str(exc),recapture_only=True)
             return self._reject_unverified_capture(state,'real_print_unavailable',PRINT_UNAVAILABLE_MESSAGE)
@@ -743,8 +766,9 @@ class AnalysisService:
                 separated_item["raw_crop_bgr"],
                 cv2.COLOR_BGR2RGB,
             )
-            foreign_object, semantic_reason = classifier.check_non_jewelry(
-                Image.fromarray(raw_crop_rgb)
+            foreign_object, semantic_reason = (
+                classifier.check_non_jewelry(Image.fromarray(raw_crop_rgb))
+                if self._model_enabled(state, "semantic_validation") else (False, "disabled_in_settings")
             )
             if foreign_object:
                 # Keep the raw-image eliminator's decision, but finish checking
@@ -841,7 +865,8 @@ class AnalysisService:
             self._save_rejected_review(state)
             return state
         for item in classified_items:
-            self._check_bangle_placement(item, item["predicted_label"])
+            if self._model_enabled(state, "bangle_placement"):
+                self._check_bangle_placement(item, item["predicted_label"])
         if any(not (item.get("placement_check") or {}).get("passed", True) for item in classified_items):
             self._reject_bangle_placement(state, classified_items)
             return state
@@ -935,7 +960,8 @@ class AnalysisService:
             )
 
         for item, confirmed_label, _learn, _route in pending_confirmations:
-            self._check_bangle_placement(item, confirmed_label)
+            if self._model_enabled(state, "bangle_placement"):
+                self._check_bangle_placement(item, confirmed_label)
         if any(not (item.get("placement_check") or {}).get("passed", True)
                for item, _label, _learn, _route in pending_confirmations):
             self._reject_bangle_placement(state, classified_items)
@@ -1248,7 +1274,7 @@ class AnalysisService:
         mask = (mask > 0).astype(np.uint8)
         thread_result = None
         thread_mask = None
-        if label_key(label) in BEAD_LABELS:
+        if label_key(label) in BEAD_LABELS and self._model_enabled(state, "thread_segmentation"):
             original = cv2.imread(state["paths"]["original"])
             source_mask, thread_result = self._get_thread().detect(original)
             origin = (state.get("rois") or {}).get("processing")
@@ -1413,7 +1439,8 @@ class AnalysisService:
                 if label_key(item.get("confirmed_label")) in {"finger ring", "ring", "bangle"}:
                     item["route"] = self._route_for_item(item, item["confirmed_label"])
             for item in classified_items:
-                self._check_bangle_placement(item, item.get("confirmed_label") or "")
+                if self._model_enabled(state, "bangle_placement"):
+                    self._check_bangle_placement(item, item.get("confirmed_label") or "")
             if any(not (item.get("placement_check") or {}).get("passed", True) for item in classified_items):
                 self._reject_bangle_placement(state, classified_items)
                 state["job"] = {"status": "failed", "stage": "Placement check",

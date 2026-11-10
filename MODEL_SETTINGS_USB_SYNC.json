@@ -1,0 +1,11 @@
+{
+  "backup": "E:\\weightScaleinstall\\testing\\model-settings-20261103_143015",
+  "files_verified": 13,
+  "protected_files_unchanged": 5,
+  "local_backend_tests": "127 passed",
+  "frontend_tests": "4 passed",
+  "frontend_build": "passed",
+  "usb_backend_tests": "121 passed, 1 skipped (research checkpoint absent)",
+  "activation": "Restart an already-running backend once and refresh the browser. Apply models then takes effect on the next capture without restart.",
+  "live_hardware_validation": "Not performed"
+}

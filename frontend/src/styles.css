@@ -366,3 +366,10 @@ button:focus-visible, select:focus-visible, a:focus-visible { outline: 3px solid
 @media (prefers-reduced-motion: reduce) {
   .captureSpinner, .captureLoadingTrack span { animation: none; }
 }
+
+.modelSettingsList { display: grid; gap: 12px; margin: 16px 0; }
+.modelSetting { border: 1px solid var(--border, #d9dee7); border-radius: 10px; padding: 12px; }
+.modelSetting label { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.modelSetting input[type="checkbox"] { width: auto; flex-shrink: 0; }
+.modelSetting p { margin: 6px 0 0; }
+.modelSettingState { display: block; margin-top: 6px; font-size: 12px; font-weight: 600; }
