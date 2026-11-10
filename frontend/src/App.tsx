@@ -7,7 +7,7 @@ type TareMode = "pledge" | "release";
 type CaptureState = Record<string, any>;
 
 const CAPTURE_MODELS = [
-  ["foreign_objects", "Anomaly / foreign-object model", "Detect paper, packets, other objects and overlapping jewellery. Disabling also bypasses foreground verification and rim filtering, which need this model's masks."],
+  ["foreign_objects", "Anomaly / foreign-object model", "Detect paper, packets, coins, bars, other objects and overlapping jewellery. Coins and bars require manual gold verification. Disabling also bypasses foreground verification and rim filtering, which need this model's masks."],
   ["component_presence", "Foreground verification", "Require anomaly-model jewellery evidence for each foreground region."],
   ["rim_filter", "Tray-rim filter", "Use geometry and jewellery classification to exclude verified tray-edge strips."],
   ["thread_only", "Thread-only / empty-testbed model", "Reject loose thread, tassels and empty-testbed crops."],
@@ -941,7 +941,12 @@ export default function App() {
               <div className="rejectedReview">
                 <span className="eyebrow errorText">Recapture required</span>
                 <h2>{active?.rejection_kind === "print_detected" ? "Printed jewellery detected — recapture required" : active?.rejection_kind === "real_print_review" || active?.rejection_kind === "real_print_unavailable" || active?.rejection_kind === "unverified_foreground" || active?.rejection_kind === "verification_unavailable" ? "Check the capture and recapture" : active?.rejection_kind === "empty_testbed" ? "Place jewellery and recapture" : active?.rejection_kind === "thread_only" ? "Thread or tassel without a jewel detected" : active?.rejection_kind === "placement" ? "Separate the jewellery and recapture" : "Other objects detected with jewellery"}</h2>
-                <p role="alert">{active?.rejection_reason}</p>
+                <p role="alert">{active?.rejection_regions?.length ? "Capture rejected. Check the marked regions below." : active?.rejection_reason}</p>
+                {(active?.rejection_regions || []).map((region: any) => (
+                  <p className="itemWarning" key={`${region.gate}-${region.tag}`}>
+                    <strong>{region.tag}: {region.label}</strong>{" — "}{region.location}. {region.reason}
+                  </p>
+                ))}
                 <ResultImage src={media.evidence} alt="Capture requiring recapture" label="Captured evidence" />
                 <button className="primary" onClick={recapture} disabled={busy || !cameraReady || !live.scale?.connected || (!scaleButtonCapture && !rois.apriltag)}>
                   {busy ? "Please wait..." : scaleButtonCapture ? "Press scale button to recapture" : "Recapture image"}
@@ -960,17 +965,18 @@ export default function App() {
                       {detectedItems.map((item: any) => (
                         <div className="detectedItem" key={item.index}>
                           <div>
-                            <strong>Jewel {item.index}</strong>
+                            <strong>J{item.index}{item.recognized_object ? ` ${item.predicted_label}` : ""}</strong>
                             <span>{Math.round(Number(item.confidence || 0) * 100)}% confidence</span>
                           </div>
                           <select
                             aria-label={`Jewel ${item.index} type`}
                             value={itemCorrections[item.index] || item.predicted_label}
-                            disabled={String(item.predicted_label).trim().toLowerCase() === "not gold jewelry"}
+                            disabled={!!item.recognized_object || String(item.predicted_label).trim().toLowerCase() === "not gold jewelry"}
                             onChange={(event) => setItemCorrections((current) => ({ ...current, [item.index]: event.target.value }))}
                           >
                             {labels.map((label) => <option key={label} value={label}>{label}</option>)}
                           </select>
+                          {item.gold_warning && <p className="itemWarning" role="alert">{item.gold_warning}</p>}
                           {(itemCorrections[item.index] || item.predicted_label) === COMBINED_NECK_LABEL && (
                             <p className="jewelleryTypeNote">{NECK_JEWELLERY_NOTE}</p>
                           )}
@@ -1096,6 +1102,7 @@ export default function App() {
                             </div>
                           )}
                         </div>
+                        {item.gold_warning && <p className="itemWarning" role="alert">{item.gold_warning}</p>}
                         {(item.errors || []).map((warning: any) => <p className="itemWarning" key={warning.stage}>{warning.stage}: {warning.message}</p>)}
                         <div className="resultGallery">
                           <ResultImage src={itemMedia.dimensions} alt={`Jewel ${item.index} size result`} label={item.dimensions?.applicable === false ? "Dimensions unavailable" : "Dimension analysis"} />

@@ -111,7 +111,7 @@ required = [
     Path("models/packet/barcodescanner.onnx"),
     Path("models/segmentation/testbed.onnx"),
     Path("models/segmentation/essaetestbed.onnx"),
-    Path("models/segmentation/anomolies.onnx"),
+    Path("models/segmentation/anomalies.onnx"),
     Path("models/classification/jewel-thread-small.onnx"),
 ]
 model = os.environ.get("JEWELLERY_CLASSIFIER_MODEL", "base384").strip().lower()

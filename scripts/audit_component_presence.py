@@ -62,9 +62,10 @@ def load_components(folder,state):
 
 
 def support():
+    from backend.app.core.config import FOREIGN_OBJECT_MODEL_PATH
     from backend.app.analysis.foreign_objects import ForeignObjectDetector
     with patch.object(ort,'InferenceSession',bounded_factory()):
-        detector=ForeignObjectDetector(ROOT/'models/segmentation/anomolies.onnx')
+        detector=ForeignObjectDetector(FOREIGN_OBJECT_MODEL_PATH)
     rows=[]
     for folder,state in select_sessions():
         components=load_components(folder,state);origin=state['rois']['processing']
@@ -164,6 +165,7 @@ def service_replay():
     from copy import deepcopy
     import tempfile
     from backend.app.services.analysis_service import AnalysisService
+    from backend.app.core.config import FOREIGN_OBJECT_MODEL_PATH
     from backend.app.analysis.foreign_objects import ForeignObjectDetector
     from backend.app.analysis.thread_classifier import JewelThreadClassifier
     from Classification.siglip384_classifier import Siglip384Classifier,GALLERY_PATH
@@ -188,7 +190,7 @@ def service_replay():
         if GALLERY_PATH.exists():shutil.copyfile(GALLERY_PATH,copied_gallery)
         with patch.object(ort,'InferenceSession',bounded_factory()):
             classifier=Siglip384Classifier(gallery_path=copied_gallery)
-            foreign=ForeignObjectDetector(ROOT/'models/segmentation/anomolies.onnx')
+            foreign=ForeignObjectDetector(FOREIGN_OBJECT_MODEL_PATH)
             thread=JewelThreadClassifier(ROOT/'models/classification/jewel-thread-small.onnx')
         class Repository:
             state=None

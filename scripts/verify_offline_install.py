@@ -36,7 +36,7 @@ def main():
              "models/detection/bead_finder.onnx", "models/detection/beadfinder_old.onnx",
              "models/packet/barcodescanner.onnx",
              "models/segmentation/testbed.onnx", "models/segmentation/essaetestbed.onnx",
-             "models/segmentation/anomolies.onnx", "Classification/siglip2-base-patch16-384/vision_model.onnx",
+             "models/segmentation/anomalies.onnx", "Classification/siglip2-base-patch16-384/vision_model.onnx",
              "Classification/siglip2-base-patch16-384/text_model.onnx"]
     for relative in paths:
         options = ort.SessionOptions()

@@ -325,36 +325,23 @@ def render_capture_review(image: np.ndarray, state: dict, items: list[dict], *,
         if bbox.get("w", 0) > 0 and bbox.get("h", 0) > 0:
             x, y = bbox.get("x", 0) + processing.get("x", 0), bbox.get("y", 0) + processing.get("y", 0)
             box = (x, y, x + bbox["w"], y + bbox["h"])
-            label_box(photo, box, f"J{index}", occupied=occupied)
+            recognized = item.get("recognized_object") or {}
+            for contour in recognized.get("mask_contours", []):
+                cv2.polylines(photo, [np.asarray(contour, dtype=np.int32)], True, (95, 190, 110), 2)
+            tag = f"J{index} {label}" if recognized else f"J{index}"
+            label_box(photo, box, tag, occupied=occupied)
             bounds.append(box)
+    from .rejection_evidence import rejection_regions, rejection_summary
+    regions = rejection_regions(state)
     anomaly_locations = []
-    for number,check in enumerate((state.get('real_print_check') or {}).get('items') or [],1):
-        if check.get('passed') is True:
-            continue
-        bbox=check.get('source_bbox') or {}
-        if bbox.get('w',0)<=0 or bbox.get('h',0)<=0:
-            continue
-        x,y=bbox['x'],bbox['y'];box=(x,y,x+bbox['w'],y+bbox['h'])
-        label_box(photo,box,f"P{number}: {check.get('label','REVIEW')}",color=(75,61,198),occupied=occupied)
-        bounds.append(box)
-    for number, detection in enumerate((state.get("foreign_object_check") or {}).get("detections") or [], 1):
-        if str(detection.get("label", "")).casefold() in {"jewellery", "jewelry", "jewel"}:
-            continue
-        bbox = detection.get("bbox") or {}
-        if bbox.get("w", 0) <= 0 or bbox.get("h", 0) <= 0:
-            continue
-        # Anomaly boxes already use raw camera coordinates, unlike item crops.
-        x, y = bbox["x"], bbox["y"]
-        box = (x, y, x + bbox["w"], y + bbox["h"])
-        name = str(detection["label"]).replace("_", " ").capitalize()
-        label_box(photo, box, f"A{number}: {name}", color=(75, 61, 198), occupied=occupied)
-        bounds.append(box)
-        tray_x, tray_y = tray.get("x", 0), tray.get("y", 0)
-        relative_x = (x + bbox["w"] / 2 - tray_x) / max(1, tray.get("w", image.shape[1]))
-        relative_y = (y + bbox["h"] / 2 - tray_y) / max(1, tray.get("h", image.shape[0]))
-        horizontal = "left" if relative_x < 1 / 3 else "right" if relative_x > 2 / 3 else "centre"
-        vertical = "top" if relative_y < 1 / 3 else "bottom" if relative_y > 2 / 3 else "middle"
-        anomaly_locations.append(f"A{number}: {name} — {vertical} {horizontal}")
+    for region in regions:
+        bbox = region["bbox"]
+        if bbox.get("w", 0) > 0 and bbox.get("h", 0) > 0:
+            x, y = bbox["x"], bbox["y"]
+            box = (x, y, x + bbox["w"], y + bbox["h"])
+            label_box(photo, box, region["annotation"], color=(75, 61, 198), occupied=occupied)
+            bounds.append(box)
+        anomaly_locations.append(f"{region['tag']}: {region['label']} - {region['location']}")
     bounds.extend(occupied)
     corners = (state.get("calibration") or {}).get("corners") or []
     if corners:
@@ -379,10 +366,14 @@ def render_capture_review(image: np.ndarray, state: dict, items: list[dict], *,
         ("TOTAL CAPTURED WEIGHT" if len(labels) > 1 else "CAPTURED WEIGHT", f"{float(weight):.2f} g" if weight is not None else "Unavailable"),
         ("DATE & TIME", date), ("IMAGE CONTENT", content),
     ]
+    gold_warnings = [f"J{item.get('index', position)}: {item['gold_warning']}"
+                     for position, item in enumerate(items, 1) if item.get("gold_warning")]
+    if gold_warnings:
+        fields.append(("GOLD VERIFICATION REQUIRED", "\n".join(gold_warnings)))
     if anomaly_locations:
-        fields.append(("OTHER OBJECTS / LOCATION", "\n".join(anomaly_locations)))
+        fields.append(("REJECTION / MARKED REGIONS", "\n".join(anomaly_locations)))
     if rejected and state.get("rejection_reason"):
-        fields.append(("RECAPTURE", str(state["rejection_reason"])))
+        fields.append(("RECAPTURE", rejection_summary(state, regions)))
     return add_side_panel(photo, "CAPTURE CONFIRMATION" if confirmed else "CAPTURE REVIEW", fields,
                           presence_ok=presence_ok, jewellery_items=labels if len(labels) > 1 else None)
 

@@ -15,6 +15,8 @@ from offline_runtime import configure, ROOT
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--audit-dir',type=Path,default=ROOT.parent/'testing/capture-improvements-20261026')
+    parser.add_argument('--model',type=Path,required=True,
+                        help='External four-class export for this historical decoder comparison')
     args=parser.parse_args(); output=args.audit_dir;output.mkdir(parents=True,exist_ok=True)
     configure()
     import cv2
@@ -31,10 +33,10 @@ def main():
     hashes={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in (ROOT/'data/sessions').rglob('*') if p.is_file()}
     hashes[str(ROOT/'data/app.db')]=hashlib.sha256((ROOT/'data/app.db').read_bytes()).hexdigest()
     segmenter=TestbedSegmenter(ROOT/'models/segmentation/essaetestbed.onnx',inset_px=12,outer_inset_ratio=.035)
-    detector=ForeignObjectDetector(ROOT/'models/segmentation/anomolies.onnx')
+    detector=ForeignObjectDetector(args.model)
     spec=importlib.util.spec_from_file_location('backend.app.analysis._before_foreign',output/'before/analysis/foreign_objects.py')
     baseline_module=importlib.util.module_from_spec(spec);spec.loader.exec_module(baseline_module)
-    baseline=baseline_module.ForeignObjectDetector(ROOT/'models/segmentation/anomolies.onnx')
+    baseline=baseline_module.ForeignObjectDetector(args.model)
     native_segmenter_session, native_detector_session=segmenter.session,detector.session
     rows=[]
     with tempfile.TemporaryDirectory(prefix='capture-regression-') as tmp:

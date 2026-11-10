@@ -24,7 +24,8 @@ from ..analysis.vision import separate_jewellery_items
 from ..analysis.rim_filter import (
     rim_candidates, remap_component_check, SIGLIP_JEWELLERY_VETO_CONFIDENCE,
 )
-from ..analysis.foreign_objects import ForeignObjectDetector
+from ..analysis.foreign_objects import ForeignObjectDetector, assign_recognized_objects, object_warning
+from ..analysis.rejection_evidence import rejection_regions, rejection_summary, source_bbox
 from ..analysis.component_presence import (
     component_presence_check, blocks_jewellery_labels, empty_classification, PRESENCE_MESSAGE,
 )
@@ -609,7 +610,10 @@ class AnalysisService:
             # Reclassification and correction cannot restore acceptance.
             return self._reject_unverified_capture(state,state.get('rejection_kind') or 'print_detected',
                 state.get('rejection_reason') or PRINT_MESSAGE)
-        state.pop("rim_edge_check", None)
+        for key in ("rim_edge_check", "component_presence_check", "thread_only_check",
+                    "placement_check", "object_assignment_check", "rejection_regions",
+                    "rejection_kind", "rejection_reason", "real_print_check"):
+            state.pop(key, None)
         image = cv2.imread(state["paths"]["working"])
         mask = cv2.imread(state["paths"]["mask"], cv2.IMREAD_GRAYSCALE)
         if image is None or mask is None:
@@ -627,6 +631,11 @@ class AnalysisService:
             padding_px=int(settings.get("padding_px", 18)),
             valid_area_mask=valid_area_mask,
         )
+        state["foreground_components"] = [
+            {"source_component_index": index, "bbox": item["bbox"],
+             "source_bbox": source_bbox(state, item["bbox"])}
+            for index, item in enumerate(separated, 1)
+        ]
         try:
             check = (self._check_foreign_objects(state, separated)
                      if self._model_enabled(state, "foreign_objects") else self._skipped_check())
@@ -670,6 +679,12 @@ class AnalysisService:
         # Explicit anomalies/placement remain authoritative and return above.
         # Exclude proven rim strips before thread/type classification. The
         # supported jewellery crops/masks are returned byte-for-byte unchanged.
+        if not assign_recognized_objects(check, separated):
+            state["object_assignment_check"] = {"passed": False}
+            return self._reject_unverified_capture(
+                state, "unverified_foreground",
+                "A coin or bar could not be matched to one separate object. Keep objects well separated and recapture.",
+            )
         if self._model_enabled(state, "rim_filter") and not check.get("skipped"):
             separated, check = self._exclude_verified_rim_strips(state, separated, check, valid_area_mask)
         else:
@@ -700,7 +715,8 @@ class AnalysisService:
         # anomaly/placement checks and before jewellery-type classification.
         thread_checks = []
         for index, item in enumerate(separated, 1):
-            result = (self._get_jewel_thread().classify(item["raw_crop_bgr"])
+            result = (self._skipped_check("coin_bar_detected_by_segmentation") if item.get("recognized_object") else
+                      self._get_jewel_thread().classify(item["raw_crop_bgr"])
                       if self._model_enabled(state, "thread_only") else self._skipped_check())
             thread_checks.append({
                 "item_index": index, "bbox": item["bbox"], "paths": item_paths[index - 1],
@@ -732,6 +748,8 @@ class AnalysisService:
                     if self._model_enabled(state, "component_presence") and not check.get("skipped")
                     else self._skipped_check("anomaly_model_disabled" if check.get("skipped") else "disabled_in_settings"))
         for item in presence["items"]:
+            component = separated[item["source_component_index"] - 1]
+            item["source_bbox"] = source_bbox(state, component["bbox"])
             retained_sources = check.get("retained_source_component_indices")
             if retained_sources:
                 item["original_component_index"] = retained_sources[item["source_component_index"] - 1]
@@ -756,12 +774,28 @@ class AnalysisService:
             return self._reject_unverified_capture(state,'print_detected' if printed else 'real_print_review',
                 PRINT_MESSAGE if printed else PRINT_REVIEW_MESSAGE)
 
-        classifier = self._get_classifier()
+        classifier = self._get_classifier() if any(not item.get("recognized_object") for item in separated) else None
         classified_items: list[dict[str, Any]] = []
         for index, separated_item in enumerate(separated, start=1):
             crop_path = Path(item_paths[index - 1]["working"])
             raw_crop_path = Path(item_paths[index - 1]["raw"])
             mask_path = Path(item_paths[index - 1]["mask"])
+            recognized = separated_item.get("recognized_object")
+            if recognized:
+                label = recognized["label"].capitalize()
+                classified_items.append({
+                    "index": index, "bbox": separated_item["bbox"],
+                    "area_px": int(separated_item["area_px"]),
+                    "paths": {**item_paths[index - 1], "prepared": str(crop_path)},
+                    "predicted_label": label, "model_label": label,
+                    "model_confidence": recognized["confidence"], "confidence": recognized["confidence"],
+                    "decision_source": "anomaly_segmentation", "classifier_label": label,
+                    "confirmed_label": None, "confirmed": False, "scores": [],
+                    "thread_check": thread_checks[index - 1], "real_print_check": print_check['items'][index - 1],
+                    "gold_verification_reason": "gold_content_not_verified", "gold_warning": object_warning(label),
+                    "recognized_object": recognized,
+                })
+                continue
             raw_crop_rgb = cv2.cvtColor(
                 separated_item["raw_crop_bgr"],
                 cv2.COLOR_BGR2RGB,
@@ -923,6 +957,8 @@ class AnalysisService:
             ).strip()
             if not confirmed_label:
                 raise RuntimeError(f"Choose an item type for jewel {item['index']}")
+            if item.get("decision_source") == "anomaly_segmentation" and confirmed_label != item["predicted_label"]:
+                raise RuntimeError("Coin/bar types come from the segmentation model. Recapture to change the detected type.")
             if (
                 route_for_label(str(item.get("predicted_label") or ""))["key"] == "no_analysis"
                 and route_for_label(confirmed_label)["key"] != "no_analysis"
@@ -971,7 +1007,7 @@ class AnalysisService:
         routes: list[dict[str, Any]] = []
         for item, confirmed_label, should_learn, item_route in pending_confirmations:
             learn_rejection = save_only and item_route["key"] == "no_analysis"
-            if (
+            if item.get("decision_source") != "anomaly_segmentation" and (
                 (learn_rejection or (should_learn and confirmed_label != item.get("predicted_label")))
                 and confirmed_label != item.get("gallery_saved_label")
             ):
@@ -982,7 +1018,7 @@ class AnalysisService:
                 continue
             item["confirmed_label"] = confirmed_label
             item["confirmed"] = True
-            item["learned"] = should_learn
+            item["learned"] = should_learn and item.get("decision_source") != "anomaly_segmentation"
             item["route"] = item_route
             confirmed_labels.append(confirmed_label)
             routes.append(item["route"])
@@ -1030,13 +1066,15 @@ class AnalysisService:
     def _reject_unverified_capture(self, state: dict[str, Any], kind: str, reason: str) -> dict[str, Any]:
         state.update(status="rejected", rejection_kind=kind, rejection_reason=reason,
                      classification=empty_classification(), route={}, result={}, updated_at=self._now())
-        state.pop("thread_only_check", None)
         self.repository.save(state)
         self._save_rejected_review(state)
         return state
 
     def _save_rejected_review(self, state: dict[str, Any]) -> None:
         """Best-effort display of an existing rejection; never change its gate."""
+        state["rejection_regions"] = rejection_regions(state)
+        state["rejection_reason"] = rejection_summary(state, state["rejection_regions"])
+        self.repository.save(state)
         original = (state.get("paths") or {}).get("original")
         if not original:
             return
@@ -1088,6 +1126,9 @@ class AnalysisService:
         if blocks_jewellery_labels(payload):
             payload.update(classification=empty_classification(), route={}, result={}, status="rejected")
             payload.setdefault("rejection_reason", "Remove the other objects and recapture.")
+        if payload.get("status") == "rejected":
+            payload["rejection_regions"] = rejection_regions(payload)
+            payload["rejection_reason"] = rejection_summary(payload, payload["rejection_regions"])
         job = payload.get("job") or {}
         if job.get("status") in {"queued", "running"}:
             deadline = float(job.get("stage_started_epoch", time.time())) + float(job.get("stage_estimate", 0))
@@ -1463,6 +1504,7 @@ class AnalysisService:
                     "route": dict(item["route"]),
                     "bangle_orientation": item.get("bangle_orientation"),
                     "errors": [],
+                    "gold_warning": item.get("gold_warning"),
                 }
                 route = item_result["route"]
                 operations = (

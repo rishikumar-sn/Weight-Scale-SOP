@@ -129,7 +129,7 @@ def remap_component_check(check: dict, retained_indices: list[int]) -> dict:
     """Retain detector evidence after exclusions without shifting ownership."""
     result = deepcopy(check)
     mapping = {source: index for index, source in enumerate(retained_indices, 1)}
-    for detection in result.get("jewellery_instances", []):
+    for detection in result.get("jewellery_instances", []) + result.get("recognized_objects", []):
         matches = []
         for match in detection.get("component_overlaps", []):
             source = match["component_index"]

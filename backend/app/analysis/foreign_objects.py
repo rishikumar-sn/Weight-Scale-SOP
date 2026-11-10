@@ -10,7 +10,42 @@ from .testbed_segmentation import TestbedSegmenter
 
 
 FOREIGN_OBJECT_THRESHOLDS = {"foreign_obj": 0.45, "plastic_packet": 0.35, "paper": 0.15}
+OBJECT_THRESHOLDS = {"coin": 0.50, "bar": 0.50}
 JEWELLERY_INSTANCE_THRESHOLD = 0.50
+
+
+def object_warning(label: str) -> str:
+    return (f"{label.capitalize()} present in the capture. Verify whether it is gold before proceeding; "
+            "the image model identifies the object type and does not verify gold content or purity.")
+
+
+def assign_recognized_objects(check: dict, components: list[dict]) -> bool:
+    """Require unique mask ownership before bypassing the jewellery classifier.
+
+    Ambiguous/merged coin or bar masks require recapture, never a SigLIP guess.
+    """
+    claimed = {}
+    failures = set()
+    objects = check.get("recognized_objects", [])
+    for number, detection in enumerate(objects, 1):
+        overlaps = detection.get("component_overlaps", [])
+        significant = [m for m in overlaps if m["component_share"] >= 0.20]
+        owners = [m for m in significant if m["component_share"] >= 0.50]
+        if len(owners) != 1 or len(significant) != 1:
+            failures.add(number)
+            continue
+        index = owners[0]["component_index"]
+        if not 1 <= index <= len(components):
+            failures.add(number)
+            continue
+        claimed.setdefault(index, []).append(number)
+    for index, numbers in claimed.items():
+        if len(numbers) > 1:
+            failures.update(numbers)
+        else:
+            components[index - 1]["recognized_object"] = objects[numbers[0] - 1]
+    check["object_assignment_failure_indices"] = sorted(failures)
+    return not failures
 
 
 class ForeignObjectDetector(TestbedSegmenter):
@@ -28,7 +63,9 @@ class ForeignObjectDetector(TestbedSegmenter):
         names = ast.literal_eval(metadata.get("names", "{}"))
         self.names = ({int(key): value for key, value in names.items()}
                       if isinstance(names, dict) else dict(enumerate(names)))
-        if set(self.names.values()) != {*FOREIGN_OBJECT_THRESHOLDS, "jewellery"}:
+        classes = set(self.names.values())
+        if classes not in ({*FOREIGN_OBJECT_THRESHOLDS, "jewellery"},
+                           {*FOREIGN_OBJECT_THRESHOLDS, *OBJECT_THRESHOLDS, "jewellery"}):
             raise RuntimeError(f"Unexpected foreign-object model classes: {self.names}")
         if set(self.names) != set(range(len(self.names))):
             raise RuntimeError("Foreign-object model class indices must be contiguous")
@@ -54,11 +91,14 @@ class ForeignObjectDetector(TestbedSegmenter):
         classes = np.argmax(scores, axis=1)
         detections = []
         jewellery_instances = []
+        recognized_objects = []
         for class_id, label in self.names.items():
             if label == "jewellery" and components is not None:
                 threshold = JEWELLERY_INSTANCE_THRESHOLD
             elif label in FOREIGN_OBJECT_THRESHOLDS:
                 threshold = FOREIGN_OBJECT_THRESHOLDS[label]
+            elif label in OBJECT_THRESHOLDS:
+                threshold = OBJECT_THRESHOLDS[label]
             else:
                 continue
             indices = np.flatnonzero((classes == class_id) & np.isfinite(rows).all(axis=1)
@@ -87,7 +127,13 @@ class ForeignObjectDetector(TestbedSegmenter):
                              "bbox": {"x": bx, "y": by, "w": bw, "h": bh}}
                 if components is not None:
                     detection["component_overlaps"] = self._component_overlaps(mask, components)
-                if label == "jewellery":
+                if label in OBJECT_THRESHOLDS:
+                    # Retain the actual segmented silhouette in full-frame coordinates.
+                    contours, _ = cv2.findContours(overlap.astype(np.uint8), cv2.RETR_EXTERNAL,
+                                                  cv2.CHAIN_APPROX_SIMPLE)
+                    detection["mask_contours"] = [c.reshape(-1, 2).tolist() for c in contours]
+                    recognized_objects.append(detection)
+                elif label == "jewellery":
                     jewellery_instances.append(detection)
                 else:
                     detections.append(detection)
@@ -97,6 +143,8 @@ class ForeignObjectDetector(TestbedSegmenter):
                 "input_image": "raw_full_frame",
                 "input_shape": list(image_bgr.shape),
                 "testbed_pixels": int(np.count_nonzero(testbed_mask))}
+        result["recognized_objects"] = recognized_objects
+        result["object_thresholds"] = dict(OBJECT_THRESHOLDS)
         if components is not None:
             result["jewellery_instances"] = jewellery_instances
             result["foreign_component_indices"] = sorted({

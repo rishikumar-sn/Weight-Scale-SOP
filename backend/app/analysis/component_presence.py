@@ -18,10 +18,11 @@ def component_presence_check(check: dict, component_count: int) -> dict:
     A permissive 20% support requirement tolerates partially predicted masks.
     """
     instances = check.get("jewellery_instances")
+    supported_instances = (instances or []) + check.get("recognized_objects", [])
     items = []
     for index in range(1, component_count + 1):
         shares = [float(match.get("component_share", 0))
-                  for instance in (instances or [])
+                  for instance in supported_instances
                   for match in instance.get("component_overlaps", [])
                   if match.get("component_index") == index]
         support = max(shares, default=0.0)

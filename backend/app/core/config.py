@@ -21,7 +21,7 @@ TESTBED_MODEL_PATHS = {
     "accet_cg1003l": PROJECT_ROOT / "models" / "segmentation" / "essaetestbed.onnx",
     "essae_jx500": PROJECT_ROOT / "models" / "segmentation" / "essaetestbed.onnx",
 }
-FOREIGN_OBJECT_MODEL_PATH = PROJECT_ROOT / "models" / "segmentation" / "anomolies.onnx"
+FOREIGN_OBJECT_MODEL_PATH = PROJECT_ROOT / "models" / "segmentation" / "anomalies.onnx"
 
 DEFAULT_SETTINGS: dict[str, Any] = {
     "camera": {

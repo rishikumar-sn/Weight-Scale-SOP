@@ -25,15 +25,20 @@
   "threshold": 0.5,
   "uncertainty_half_band": 0.05,
   "resize": "PIL bilinear letterbox; RGB; fill 240",
-  "sha256": "19293fba835db064bee1aeeeab253ca504250f8e467951d142488cb7bc2d25ee",
-  "source_checkpoint_sha256": "6c0c916d6f4d001e053ca64ebc6bcf13ed181f10569942d96578c294e45210c9",
-  "dataset_version": "confirmed-real-enriched-20261102",
-  "best_epoch": 6,
+  "sha256": "b8911d1d2887b5ea6102ff3aaeeb8f72badb0689ee00a0db1aa4a4aef767b7b6",
+  "source_checkpoint_sha256": "f62ec165a2b56f53641a08743b23539232b9e6a3301238831b387fd6aee0b8eb",
+  "dataset_version": "physical-small-coin-correction-20261110",
   "evaluation": {
     "held_out_real": 21,
     "held_out_print": 15,
     "correct_real": 21,
     "correct_print": 15,
-    "limitations": "Small held-out set; source identities are inferred; requires broader deployment validation."
-  }
+    "limitations": "Original 36-item held-out test retained; three views of one confirmed physical coin were training corrections, not independent coin validation. Broader coin/bar/printer validation is still required.",
+    "correction_training_pairs": 3,
+    "correction_physical_objects": 1
+  },
+  "source_checkpoint": "experiment/real_print_lab/checkpoints/run_20261110_coin_correction/best.pt",
+  "correction_method": "Frozen MobileNet backbone; classifier-head-only replay training; original validation/test retained",
+  "base_best_epoch": 6,
+  "head_training_step": 600
 }

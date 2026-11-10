@@ -36,6 +36,8 @@ def uses_thread_classifier(label: str | None) -> bool:
 
 def route_for_label(label: str, *, bangle_orientation: str | None = None) -> dict[str, Any]:
     key = label_key(label)
+    if key in {"coin", "bar"}:
+        return {"key": "object_review", "dimension": False, "beads": False, "stones": False}
     if key in {"finger ring", "ring"}:
         return {
             "key": "dimension",
@@ -75,5 +77,5 @@ def route_for_label(label: str, *, bangle_orientation: str | None = None) -> dic
 def class_labels(prompt_path: Path) -> list[str]:
     payload = json.loads(prompt_path.read_text(encoding="utf-8"))
     labels = list((payload.get("classes") or {}).keys())
-    additions = ["Other Gold Jewellery", "Not Gold Jewelry"]
+    additions = ["Other Gold Jewellery", "Not Gold Jewelry", "Coin", "Bar"]
     return sorted(set(labels + additions), key=str.casefold)

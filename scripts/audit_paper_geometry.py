@@ -240,6 +240,7 @@ def summarize(replay_anomalies=False):
     if replay_anomalies:
         sys.path.insert(0,str(ROOT))
         import onnxruntime as ort
+        from backend.app.core.config import FOREIGN_OBJECT_MODEL_PATH
         from backend.app.analysis.foreign_objects import ForeignObjectDetector
         from unittest.mock import patch
         original=ort.InferenceSession
@@ -247,7 +248,7 @@ def summarize(replay_anomalies=False):
             options=ort.SessionOptions();options.intra_op_num_threads=4;options.inter_op_num_threads=1
             kwargs['sess_options']=options
             return original(*args,**kwargs)
-        model=ROOT/'models/segmentation/anomolies.onnx'
+        model=FOREIGN_OBJECT_MODEL_PATH
         with patch.object(ort,'InferenceSession',bounded):detector=ForeignObjectDetector(model)
         replay=[]
         for row in rows:

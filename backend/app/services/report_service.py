@@ -176,6 +176,12 @@ class ReportService:
             draw.rectangle((x1, y1, x2, y2), outline=box_color, width=box_width)
             item_index = int(item.get("index") or position)
             tag_text = f"J{item_index}"
+            if item.get("recognized_object"):
+                tag_text += " " + str(item.get("confirmed_label") or item.get("predicted_label"))
+                for contour in item["recognized_object"].get("mask_contours", []):
+                    points = [tuple(point) for point in contour]
+                    if len(points) > 1:
+                        draw.line(points + points[:1], fill=box_color, width=box_width)
             tag_font = self._fit_text(
                 draw,
                 tag_text,
@@ -321,8 +327,13 @@ class ReportService:
             )
             type_font = self._fit_text(draw, label, available_width - px(125), px(34), bold=True)
             beads_item = (items[index - 1].get("beads") or {}) if index <= len(items) else {}
-            text_y = top + (item_height - type_font.size) // 2 - px(4) - (px(16) if beads_item else 0)
+            gold_review = label_key(label) in {"coin", "bar"}
+            text_y = top + (item_height - type_font.size) // 2 - px(4) - (px(16) if beads_item or gold_review else 0)
             draw.text((badge_x + badge_size + px(22), text_y), label, fill=ink, font=type_font)
+            if gold_review:
+                note = "Verify gold content / purity"
+                draw.text((badge_x + badge_size + px(22), top + item_height - px(35)), note,
+                          fill="#9A6816", font=self._fit_text(draw, note, available_width - px(125), px(21)))
             if beads_item:
                 bead_count = beads_item.get("count", len(beads_item.get("detections") or []))
                 draw.text((badge_x + badge_size + px(22), top + item_height - px(39)), f"Bead count: {bead_count}",
@@ -418,6 +429,9 @@ class ReportService:
             ("PADDING", (0, 0), (-1, -1), 7),
         ]))
         story.extend([Paragraph("Capture details", heading), table])
+        for item in classification.get("items") or []:
+            if item.get("gold_warning"):
+                story.append(Paragraph(escape(f"J{item['index']}: {item['gold_warning']}"), body))
 
         result = state.get("result") or {}
         if stone_estimation_enabled(state) and int(result.get("count") or len(result.get("items") or [])) == 1 and any(

@@ -129,7 +129,7 @@ def test_api_rejects_old_completed_results_when_print_is_blocked(handler):
 def test_export_matches_checkpoint_and_lab_transforms(model):
     # Export validation uses research assets when available; production runtime
     # itself imports no experiment code, torch or torchvision.
-    checkpoint=PROJECT_ROOT/'experiment/real_print_lab/checkpoints/run_20261102_enriched_real/best.pt'
+    checkpoint=PROJECT_ROOT/model.config.get('source_checkpoint', 'experiment/real_print_lab/checkpoints/run_20261102_enriched_real/best.pt')
     if not checkpoint.is_file(): pytest.skip('Research checkpoint is not part of the production runtime')
     import sys
     sys.path.insert(0,str(checkpoint.parents[2]))

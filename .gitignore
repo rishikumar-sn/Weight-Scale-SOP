@@ -43,6 +43,8 @@ data/ring-validation/
 *.bak
 .DS_Store
 Thumbs.db
+# Retired anomaly export; keep any local copies outside the project.
+/models/segmentation/anomolies.onnx
 /new_classification
 /chain_datasets
 

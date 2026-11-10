@@ -200,9 +200,10 @@ def siglip_run():
 
 
 def ownership_run():
+    from backend.app.core.config import FOREIGN_OBJECT_MODEL_PATH
     from backend.app.analysis.foreign_objects import ForeignObjectDetector
     from backend.app.analysis.vision import separate_jewellery_items
-    detector = ForeignObjectDetector(ROOT/'models/segmentation/anomolies.onnx')
+    detector = ForeignObjectDetector(FOREIGN_OBJECT_MODEL_PATH)
     results=[]
     for sid in samples():
         folder,state,image,valid,fg=load(sid)

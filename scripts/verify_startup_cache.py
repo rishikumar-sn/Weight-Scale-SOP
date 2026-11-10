@@ -22,7 +22,7 @@ def main():
             shutil.copyfile(ROOT / name, root / name)
         for name in ('.venv/pyvenv.cfg', 'frontend/dist/index.html', 'frontend/index.html', 'frontend/package.json', 'frontend/package-lock.json', 'requirements.txt'):
             (root / name).write_text('test')
-        assets = ['models/detection/bead_finder.onnx', 'models/packet/barcodescanner.onnx', 'models/segmentation/testbed.onnx', 'models/segmentation/essaetestbed.onnx', 'models/segmentation/anomolies.onnx']
+        assets = ['models/detection/bead_finder.onnx', 'models/packet/barcodescanner.onnx', 'models/segmentation/testbed.onnx', 'models/segmentation/essaetestbed.onnx', 'models/segmentation/anomalies.onnx']
         assets += ['Classification/siglip2-base-patch16-384/' + name for name in ('vision_model.onnx', 'vision_model.onnx_data', 'text_model.onnx', 'text_model.onnx_data', 'config.json', 'preprocessor_config.json', 'tokenizer.json', 'tokenizer_config.json')]
         assets += ['models/classification/jewel-thread-small.onnx']
         for name in assets:
