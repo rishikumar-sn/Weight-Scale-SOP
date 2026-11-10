@@ -63,3 +63,5 @@ Thumbs.db
 /.offline-python/
 # Generated cache; keep foreign_object_prompts.json because the classifier loads it
 /experiment/
+# Isolated cut-out-print surface research, datasets and generated reports.
+/experiment/cutout_surface_lab/
