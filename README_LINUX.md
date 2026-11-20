@@ -28,6 +28,19 @@ auto-discovers `/dev/ttyUSB*` and `/dev/ttyACM*` ports, and reconnects after
 unplugging or port-number changes. Both grams and carats display live; jewellery
 and tare captures require grams. See [scale selection](README.md#weight-scale-selection).
 
+For **ACZET CG1003L**, select it under **Settings > Weight scale** and apply.
+Close settings, choose jewellery or tare, set the scale to grams, and press its
+PRINT/send button. The app listens at 9600 baud, identifies the USB port from the
+first valid packet, and freezes the camera image with that reading. The port stays
+open while the scale is silent; each new button press triggers a capture when the
+selected workflow is ready. Jewellery capture requires a visible AprilTag.
+Reconnection scans the available USB ports again, so changing ttyUSB numbers
+needs no manual edit.
+The saved internal model key remains `accet_cg1003l` for Windows compatibility.
+
+The old bead detector (`beadfinder_old.onnx`) uses confidence 0.50; the newer
+`bead_finder.onnx` retains 0.35.
+
 ## 1. Install system dependencies
 
 Run these commands on the Ubuntu PC:
@@ -161,8 +174,9 @@ Prefer an explicit persistent scale port, for example:
 ```
 
 Use the actual symlink from the device listing. `/dev/ttyUSB0` and `/dev/ttyACM0`
-also work but their numbers can change after reboot. An explicit Linux path is
-retried on disconnect; the backend does not switch to another serial device.
+also work but their numbers can change after reboot. A persistent by-id/by-path alias is
+retried on disconnect. Numbered ttyUSB/ttyACM ports are rediscovered using the
+saved USB identity when available.
 An empty port enables automatic selection (CH340 preferred, otherwise the first
 serial device). A copied `COM12` setting also falls back to detection on Linux.
 Use an explicit path when multiple serial devices are connected.

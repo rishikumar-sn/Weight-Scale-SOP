@@ -8,6 +8,9 @@ from types import SimpleNamespace
 from backend.app.analysis.testbed_segmentation import TestbedSegmenter
 
 
+ESSAE_TAG = {"found": True, "corners": [[43.5, 161], [53.5, 161], [53.5, 171], [43.5, 171]]}
+
+
 def test_square_roi_masks_polygon_and_preserves_coordinate_mapping() -> None:
     image = np.zeros((10, 14, 3), dtype=np.uint8)
     image[:, :, 0] = np.arange(14, dtype=np.uint8)[None, :]
@@ -59,23 +62,24 @@ def essae_segmenter(circle_score: float = .95) -> TestbedSegmenter:
     segmenter.names = {0: "Circle", 1: "Test-Bed"}
     segmenter.testbed_class_id = 1
     segmenter.circle_class_id = 0
-    segmenter.input_height = segmenter.input_width = 100
+    segmenter.input_height = segmenter.input_width = 200
     segmenter.input_name = "images"
     segmenter.confidence_threshold = segmenter.mask_threshold = .5
     segmenter.inset_px = 2
-    prototypes = np.full((1, 2, 100, 100), -10, np.float32)
-    prototypes[0, 0, 10:90, 10:90] = 10
+    segmenter.fill_platform_holes = True
+    prototypes = np.full((1, 2, 200, 200), -10, np.float32)
+    prototypes[0, 0, 10:190, 10:190] = 10
     prototypes[0, 0, 60:75, 60:75] = -10  # Missing platform pixels under an object.
     prototypes[0, 1, 30:50, 30:50] = 10
     prototypes[0, 1, 37:43, 37:43] = -10  # Missing pixels inside the hole prediction.
-    rows = np.array([[50, 50, 80, 80, .01, .8, 1, 0],
+    rows = np.array([[100, 100, 180, 180, .01, .8, 1, 0],
                      [40, 40, 20, 20, circle_score, .01, 0, 1]], np.float32)
     segmenter.session = SimpleNamespace(run=lambda *_: [rows.T[None], prototypes])
     return segmenter
 
 
 def test_essae_class_order_gap_filling_and_hole_margin() -> None:
-    result = essae_segmenter().segment(np.zeros((100, 100, 3), np.uint8))
+    result = essae_segmenter().segment(np.zeros((200, 200, 3), np.uint8), apriltag=ESSAE_TAG)
     assert result.confidence == pytest.approx(.8)
     assert result.source_mask[65, 65] == 1  # Restore interior platform gaps.
     assert result.source_mask[10, 50] == 0  # Trim the tray's outer edge.
@@ -86,8 +90,25 @@ def test_essae_class_order_gap_filling_and_hole_margin() -> None:
 
 
 def test_essae_missing_hole_blocks_capture() -> None:
-    with pytest.raises(RuntimeError, match="circular hole was not detected"):
-        essae_segmenter(.2).segment(np.zeros((100, 100, 3), np.uint8))
+    with pytest.raises(RuntimeError, match="Keep the circular hole clear"):
+        essae_segmenter(.2).segment(np.zeros((200, 200, 3), np.uint8), apriltag=ESSAE_TAG)
+
+
+def test_testbed_guide_cannot_override_anchor_or_crop_selected_tray() -> None:
+    segmenter = essae_segmenter()
+    run = segmenter.session.run
+    prediction, prototypes = run()
+    # A stronger proposal fits the guide but excludes the AprilTag.
+    decoy = np.array([40, 40, 20, 20, .01, .99, 0, 1], np.float32)
+    prediction = np.concatenate([prediction, decoy[None, :, None]], axis=2)
+    segmenter.session.run = lambda *_: [prediction, prototypes]
+    image = np.zeros((200, 200, 3), np.uint8)
+
+    result = segmenter.segment(image, apriltag=ESSAE_TAG, guide={"x": 30, "y": 30, "w": 20, "h": 20})
+
+    assert result.confidence == pytest.approx(.8)
+    assert result.selection_validation["valid_candidates"] == 1
+    assert result.source_mask[160, 45] == 1
 
 
 @pytest.mark.parametrize("scale", [1, 2])
@@ -117,9 +138,10 @@ def test_scaled_outer_margin_removes_rim_without_erasing_interior_jewel(scale) -
 
 def test_outer_margin_does_not_expand_circular_hole() -> None:
     segmenter = essae_segmenter()
-    baseline = segmenter.segment(np.zeros((100, 100, 3), np.uint8))
+    image = np.zeros((200, 200, 3), np.uint8)
+    baseline = segmenter.segment(image, apriltag=ESSAE_TAG)
     segmenter.outer_inset_ratio = .08
-    result = segmenter.segment(np.zeros((100, 100, 3), np.uint8))
+    result = segmenter.segment(image, apriltag=ESSAE_TAG)
     np.testing.assert_array_equal(result.source_mask[25:55, 25:55],
                                   baseline.source_mask[25:55, 25:55])
     assert result.source_mask.sum() < baseline.source_mask.sum()

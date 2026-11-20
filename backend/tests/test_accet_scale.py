@@ -10,7 +10,7 @@ import serial
 from backend.app.core.config import SettingsStore, TESTBED_MODEL_PATHS
 from backend.app.hardware.scale import ScaleService
 from backend.app.services.capture_service import CaptureService
-from backend.tests.test_testbed_segmentation import essae_segmenter
+from backend.tests.test_testbed_segmentation import ESSAE_TAG, essae_segmenter
 from backend.app.analysis.vision import (
     apriltag_roi_from_detection, build_jewellery_mask, detect_apriltag,
     marker_ignore_mask, separate_jewellery_items, translate_roi_to_crop,
@@ -95,20 +95,31 @@ def test_capture_uses_event_frame_and_weight_once_and_blocks_manual_capture(tmp_
     service.scale.snapshot.assert_not_called()
     with pytest.raises(RuntimeError, match='already captured'):
         service._capture_inputs(1)
-    with pytest.raises(RuntimeError, match='Press the ACCET'):
+    with pytest.raises(RuntimeError, match='Press the ACZET'):
         service.capture()
 
 
-@pytest.mark.parametrize('tare', [False, True])
-def test_apriltag_is_mandatory_on_every_button_capture(tmp_path, tare):
+def test_apriltag_is_mandatory_on_jewellery_button_capture(tmp_path):
     service = capture_service(tmp_path)
     with patch('backend.app.services.capture_service.detect_apriltag', side_effect=RuntimeError('AprilTag missing')), pytest.raises(RuntimeError):
-        if tare:
-            service.capture_tare('pledge', reading_id=1)
-        else:
-            service.capture(reading_id=1)
+        service.capture(reading_id=1)
     service.repository.session_dir.assert_not_called()
     service.repository.save.assert_not_called()
+
+
+def test_tare_button_capture_saves_without_an_apriltag(tmp_path):
+    service = capture_service(tmp_path)
+    service.repository.session_dir.return_value = tmp_path
+    service.packet_scanner = Mock()
+    service.packet_scanner.scan.return_value = {"message": "No packet ID detected"}
+    service.reports = Mock()
+    with patch('backend.app.services.capture_service.detect_apriltag') as detect:
+        state = service.capture_tare('pledge', reading_id=1)
+
+    detect.assert_not_called()
+    assert state['weight_g'] == 2.972
+    assert state['capture_type'] == 'tare'
+    service.repository.save.assert_called_once_with(state)
 
 
 def test_expired_event_and_non_gram_unit_cannot_be_saved(tmp_path):
@@ -139,7 +150,7 @@ def test_non_gram_packet_never_takes_photo_or_saves_capture(tmp_path, unit, tare
 def test_accet_testbed_does_not_require_or_remove_circle():
     segmenter = essae_segmenter(circle_score=0)
     segmenter.circle_class_id = None
-    result = segmenter.segment(np.zeros((100, 100, 3), np.uint8))
+    result = segmenter.segment(np.zeros((200, 200, 3), np.uint8), apriltag=ESSAE_TAG)
     assert np.any(result.source_mask)
     assert result.hole_validation is None
 

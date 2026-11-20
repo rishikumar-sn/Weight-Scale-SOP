@@ -226,7 +226,10 @@ class CaptureService:
         with self._testbed_lock:
             settings = self.settings_store.get()
             segmenter = self._get_testbed_segmenter()
-            testbed = segmenter.segment(frame, apriltag=detected)
+            testbed = segmenter.segment(
+                frame, apriltag=detected,
+                guide=roi_to_pixels(settings["rois"].get("testbed_guide"), width, height),
+            )
             testbed_model_path = segmenter.model_path
             del segmenter
         processing = testbed.image
@@ -284,6 +287,7 @@ class CaptureService:
                 "model": str(testbed_model_path),
                 "confidence": testbed.confidence,
                 "hole_validation": testbed.hole_validation,
+                "selection_validation": testbed.selection_validation,
                 "masking": "polygon_with_white_square_padding",
             },
             "calibration": calibration,

@@ -22,11 +22,11 @@ data/                    Runtime settings, captures, metadata, and reports
 run.py                   Production entry point
 ```
 
-## ACCET CG1003L
+## ACZET CG1003L
 
-Select **ACCET CG1003L** in **Settings > Scale model** and apply. It uses
+Select **ACZET CG1003L** in **Settings > Scale model** and apply. It uses
 9600 baud; COM11 is the initial Windows preference. USB serial ports are
-monitored until an ACCET packet identifies the scale, and the detected port and
+monitored until an ACZET packet identifies the scale, and the detected port and
 USB identity are remembered. The connection remains open between button presses.
 
 Close settings, select jewellery capture or the required pledge/release tare
@@ -39,7 +39,7 @@ button press recaptures directly and saves the previous review corrections.
 A new press can also capture again from rejection, failure, or completed results.
 
 The configured AprilTag must be detected in every jewellery capture. Tare
-captures do not require an AprilTag on any scale. The ACCET uses `models/segmentation/essaetestbed.onnx` for its
+captures do not require an AprilTag on any scale. The ACZET uses `models/segmentation/essaetestbed.onnx` for its
 testbed, with the circular-hole class ignored. Other scales retain their existing
 segmentation rules. Signed readings retain their source unit. Capture is allowed only when the scale
 reports grams (`g`); kg, mg, ct, GSM, and other units are blocked without taking
@@ -48,7 +48,7 @@ grams and press its button again.
 
 ## Foreign-object rejection
 
-After foreground candidate extraction, `models/segmentation/anomolies.onnx` checks the raw camera
+After foreground candidate extraction, `models/segmentation/anomalies.onnx` checks the raw camera
 image for objects mixed with jewellery. Only object segmentation pixels inside
 the detected testbed polygon count. Confidence thresholds are `foreign_obj=0.45`,
 `plastic_packet=0.35`, and `paper=0.15`; the `jewellery` label does not reject a
@@ -146,7 +146,7 @@ requires a connected camera with a current frame and an available scale.
 ### Weight scale selection
 
 Open **Settings > Weight scale**, select **EMBSYS WM** (the original CH340
-scale) or **ESSAE JX500**, then click **Apply scale**. Applying saves the model
+scale), **ESSAE JX500**, or **ACZET CG1003L**, then click **Apply scale**. Applying saves the model
 in the current OS hardware profile and reconnects the serial reader immediately.
 Startup restores that selection. Switching models preserves each model's serial
 settings; existing installations keep EMBSYS WM selected by default.
@@ -361,16 +361,20 @@ stones. Image analysis cannot guarantee zero false detections for every capture;
 neutral cavities and black stones can have indistinguishable pixels.
 
 - Default camera: index `0`, 1920x1080 at 30 FPS, displayed with 270-degree rotation.
-- Default scale: `COM12` on Windows, auto-detection on Linux, at 9600 baud;
+- Default scale: automatic USB discovery on Windows and Linux at 9600 baud;
   CH340 devices are preferred during auto-detection.
 - Inference always uses CPU. Requirements pin the CPU-only PyTorch wheel and
   use the CPU ONNX Runtime and PaddlePaddle packages; CUDA is not required.
 - Runtime captures and reports are written under `data/sessions/`.
 - Saved camera areas and device settings are stored in `data/settings/app.json`.
+- In **Settings > Testbed guide area**, you can draw an optional rectangle around
+  the tray. The guide helps distinguish similarly scored trays. Capture uses the
+  full selected tray polygon, with selection anchored to the AprilTag and any
+  required fixture.
 - One capture may contain multiple jewels. Keep a visible background gap between
   jewels so Otsu component separation can assign one box, class, and analysis
-  result to each item. Bangles receive OD/ID analysis, finger rings skip analysis,
-  and other jewel types receive their configured bead/stone analysis independently.
+  result to each item. Bangles and finger rings receive dimension analysis.
+  Other jewel types receive their configured bead and stone analysis independently.
 
 ### Bead analysis
 
@@ -427,3 +431,22 @@ Use `--disable-gallery` to measure SigLIP prompts alone. The script groups `_ful
 and `_roi` files by capture ID, uses both as calibration views, and still counts
 the pair as one sample. Validation uses ROI by default; pass `--image-kind full`
 for the separate full-frame robustness check.
+
+## Capture model settings
+
+Open **Settings > Models** to enable or disable individual capture checks.
+Click **Apply models** to save; the next capture uses the updated settings.
+See [MODEL_SETTINGS.md](MODEL_SETTINGS.md) for available switches and dependencies.
+
+## Coin/bar and rejection updates — 11 November 2026
+
+The active six-class anomaly model recognizes jewellery, coin, bar, foreign objects,
+paper and plastic packets. Coins and bars use a 0.50 detection threshold and must
+match one separate foreground object. They retain REAL/PRINT verification, skip
+jewellery classification and jewellery-specific analysis, and display a manual
+gold-content verification warning in the review, final result and PDF.
+
+Rejected captures now show matching region tags, locations and reasons in the UI
+and evidence image. The corrected REAL/PRINT weights retain the 0.50 threshold
+and ±0.05 uncertainty band. See [COIN_BAR_MODEL_INTEGRATION.md](COIN_BAR_MODEL_INTEGRATION.md)
+and [REJECTION_RELIABILITY_20261110.md](REJECTION_RELIABILITY_20261110.md).

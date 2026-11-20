@@ -181,7 +181,14 @@ def visible_ring_ellipses(img, scale=None, *, allow_open=False, return_evidence=
             if fitted is None:
                 continue
             outer, outer_support = fitted
-            if min(np.array(outer[1]) - inner[1]) < 2 or np.linalg.norm(np.array(outer[0]) - inner[0]) > radius * (.18 if allow_open else .12):
+            # A raised setting or an uneven band shifts the outside silhouette
+            # relative to the opening. Bound that shift by the observed wall
+            # thickness as well as the opening radius; thin bands retain the
+            # original concentricity limit. Full containment is checked below.
+            wall = min(np.array(outer[1]) - inner[1]) / 2
+            center_limit = max(radius * (.18 if allow_open else .12),
+                               min(radius * .25, wall * .75))
+            if wall < 1 or np.linalg.norm(np.array(outer[0]) - inner[0]) > center_limit:
                 continue
             # Different ellipse orientations can cross despite ordered axis
             # lengths. The complete opening must remain inside the outer band.

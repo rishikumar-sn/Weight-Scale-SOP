@@ -37,7 +37,8 @@ def main():
     new_boxes = [[100, 100, 200, 200, .9], [300, 100, 310, 110, .8],
                  [680, 100, 710, 130, .99], [400, 200, 440, 240, .99],
                  [350, 100, 370, 120, .1]]
-    old_boxes = [[110, 110, 210, 210, .85], [500, 100, 580, 180, .8]]
+    old_boxes = [[110, 110, 210, 210, .85], [500, 100, 580, 180, .8],
+                 [550, 260, 575, 285, .4]]
     calls = []
 
     class Session:
@@ -60,6 +61,9 @@ def main():
     with patch.object(detector, 'session', Session(960, new_boxes)), patch.object(old, 'session', Session(640, old_boxes)):
         result, _, _ = detector.run(raw, detection_region=region, detection_mask=mask)
         assert result['count'] == 3, result
+        assert {m['model']: m['score_threshold'] for m in result['models']} == {
+            'bead_finder.onnx': .35, 'beadfinder_old.onnx': .50,
+        }
         assert {tuple(d['bbox']) for d in result['detections']} == {
             (100, 100, 200, 200), (300, 100, 310, 110), (500, 100, 580, 180),
         }

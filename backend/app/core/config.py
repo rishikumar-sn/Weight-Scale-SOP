@@ -56,6 +56,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     },
     "rois": {
         "processing": None,
+        "testbed_guide": None,
         "apriltag": None,
     },
     "apriltag": {

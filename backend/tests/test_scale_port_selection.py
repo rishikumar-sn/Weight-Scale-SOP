@@ -10,7 +10,7 @@ def port(device, description="Serial device", hwid="", **metadata):
     return SimpleNamespace(device=device, description=description, hwid=hwid, **metadata)
 
 
-@pytest.mark.parametrize("configured", ["/dev/ttyUSB0", "/dev/serial/by-id/usb-scale"])
+@pytest.mark.parametrize("configured", ["/dev/serial/by-id/usb-scale", "/dev/serial/by-path/usb-scale"])
 def test_linux_explicit_device_survives_disconnect(configured):
     service = ScaleService(lambda: {"scale": {"port": configured}})
     with patch("backend.app.hardware.scale.os", SimpleNamespace(name="posix")), patch(
@@ -19,12 +19,23 @@ def test_linux_explicit_device_survives_disconnect(configured):
         assert service._select_port() == configured
 
 
+def test_linux_remembered_identity_wins_after_numbered_port_changes():
+    scale = port("/dev/ttyUSB3", vid=0x1A86, pid=0x7523, serial_number="scale")
+    service = ScaleService(lambda: {"scale": {
+        "port": "/dev/ttyUSB0", "usb_identity": ScaleService._port_identity(scale),
+    }})
+    with patch("backend.app.hardware.scale.os", SimpleNamespace(name="posix")), patch(
+        "serial.tools.list_ports.comports", return_value=[port("/dev/ttyUSB0"), scale],
+    ):
+        assert service._select_port() == "/dev/ttyUSB3"
+
+
 def test_copied_windows_setting_finds_linux_ch340():
     service = ScaleService(lambda: {"scale": {"port": "COM12"}})
     with patch("backend.app.hardware.scale.os", SimpleNamespace(name="posix")), patch("serial.tools.list_ports.comports", return_value=[
-        port("/dev/ttyS0"), port("/dev/ttyUSB0", hwid="USB VID:PID=1A86:7523"),
+        port("/dev/ttyUSB0"), port("/dev/ttyUSB3", hwid="USB VID:PID=1A86:7523"),
     ]):
-        assert service._select_port() == "/dev/ttyUSB0"
+        assert service._select_port() == "/dev/ttyUSB3"
 
 
 def test_windows_explicit_port_still_takes_priority():

@@ -37,3 +37,7 @@ Unknown model keys are rejected; omitted fields default to true.
 Deployment: after installing this code update, restart an already running backend
 once and refresh the browser. Subsequent Apply models changes need no restart.
 Live camera/scale demo validation is still required on the target hardware.
+
+Anomaly-model jewellery masks use a 0.30 confidence threshold for foreground
+support. Overlap checks use 0.50. Stations can disable foreground verification
+(`component_presence`) independently of anomaly detection (`foreign_objects`).

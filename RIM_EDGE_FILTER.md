@@ -9,7 +9,7 @@ It uses the detected testbed polygon and AprilTag physical scale. It does not
 change the ROI, Otsu extraction, model weights, prompts, category thresholds,
 item masks, dimension calculations, or stone analysis.
 
-An exclusion requires all of the following:
+The original narrow neutral-strip path requires all of the following:
 
 - The anomaly and placement gates pass. An explicit foreign-object detection
   cannot be ignored, including at the border.
@@ -75,3 +75,38 @@ parallel to the rim can resemble a rim strip. Supported jewellery, coloured
 foreground, closed shapes, confident semantic positives and explicit detected
 anomalies are protected. If evidence is insufficient, recapture is retained.
 Restart the backend (or start it normally if closed) to load the change.
+
+
+## Broad tray lips: 11 November 2026
+
+Moving the Essae tray changed the platform segmentation, although saved camera,
+ROI and model settings stayed identical. Three captures included the bottom lip
+as unsupported foreground; the fourth excluded it. Cleaning could not remove
+this structural feature. The screenshot failure's strip reached 41 pixels
+(7.66 mm) inside the detected boundary, beyond the original 5 mm band. Its
+rotated thickness was 5.59 mm and 57.5% of foreground pixels exceeded the colour
+limit. Raising proximity alone would therefore not solve this failure.
+
+An additional path requires original-image evidence that a rail continues for
+10 mm beyond BOTH ends of a proposal. It preserves the anomaly, placement,
+calibration, instance-overlap, closed-opening and semantic/gallery guards above.
+It requires every foreground pixel within 10 mm of the outer polygon, capped at
+6% of the working short side; thickness <=7 mm, aspect >=8, and boundary distance
+variation <=1.5 times thickness. Original pixels at the supplied coordinate
+mapping must exactly match raw proposal pixels. Missing or clipped source images
+cannot activate this path.
+
+Profiles perpendicular to the rail are sampled through its middle and outside
+both endpoints (with a 1 mm gap). A structural profile needs intensity range >=40,
+mean absolute BGR profile error <=15 on each side, and at least 80% of sampled
+columns in each section within mean absolute error 20 of the reference profile.
+Flat backgrounds, finite brown bars and continuation on only one side are
+insufficient. Colour alone is never evidence for this broader path. Matching
+statistics and its separate band/thickness/aspect are recorded in
+`rim_edge_check.items[].rim_continuation`. The original neutral path is unchanged.
+
+This is a bounded visual heuristic, not a universal reliability guarantee. A
+missed real object visually continuous with a fixture remains a limitation.
+Independent live captures across tray positions and lighting are still needed.
+Regression evidence, isolated service replays and the investigation report are
+in `testing/rim-reliability-20261111/`. Restart the backend to load the update.

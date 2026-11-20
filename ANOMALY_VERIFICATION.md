@@ -51,3 +51,11 @@ Limits: no live camera or USB scale test was performed. Saved captures are all
 JX500; EMBSYS uses the same anomaly gate, but no EMBSYS capture was available for
 image-level replay. Model weights and detection thresholds were not changed.
 Restart the backend to load the updated code.
+
+## Jewellery support update — 11 November 2026
+
+Positive jewellery-mask support now uses 0.30 confidence. Explicit anomaly
+thresholds remain foreign object 0.45, plastic packet 0.35 and paper 0.15;
+accepted anomalies still reject the whole capture regardless of jewellery
+support. Multiple-instance placement checking retains 0.50 confidence.
+See `testing/jewellery-confidence-20261111/report.md` in the installation root.

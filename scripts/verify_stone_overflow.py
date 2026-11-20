@@ -70,9 +70,54 @@ def main():
     strand_image = np.full((*strand.shape, 3), 255, np.uint8)
     strand_image[strand > 0] = (110, 25, 180)
     faces = v._non_gold_color_components(strand_image, strand, np.zeros_like(strand))
-    assert len(faces) == 12, len(faces)
+    legacy_faces = [face for face in faces if not face.get('source_methods')]
+    assert len(legacy_faces) == 12, len(legacy_faces)
+    assert len(faces) <= 24, len(faces)
     assert all(cv2.countNonZero(face['mask']) < cv2.countNonZero(strand) * .16 for face in faces)
-    print('Passed: 60 colored beads recovered; 12 touching beads split; warm metal, white glare and dark shadows excluded.')
+    # A warm residual bridge can inflate the global distance peak so the old
+    # watershed sees a single region. The strict chromatic complement must
+    # still find every bead without accepting that warm area or a thin cord.
+    bridged = np.full((360, 640, 3), (30, 75, 110), np.uint8)
+    bridged_jewel = np.full((360, 640), 255, np.uint8)
+    for face in expected:
+        bridged[face > 0] = (110, 25, 180)
+    # A long colored thread and a compact warm-metal area are negatives.
+    cord = np.zeros_like(bridged_jewel)
+    cv2.rectangle(cord, (15, 310), (610, 313), 255, -1)
+    bridged[cord > 0] = (40, 100, 25)
+    recovered_faces = v._non_gold_color_components(
+        bridged, bridged_jewel, np.zeros_like(bridged_jewel))
+    assert len(recovered_faces) == 60, len(recovered_faces)
+    recovered_union = np.zeros_like(bridged_jewel)
+    for face in recovered_faces:
+        recovered_union |= face['mask']
+    assert all(np.mean(recovered_union[m > 0] > 0) >= .95 for m in expected)
+    assert not np.any(recovered_union[cord > 0])
+    assert not np.any(recovered_union[300:305])
+    with patch.object(v, '_structural_components', return_value=[]), \
+         patch.object(v, '_non_gold_neutral_components', return_value=[]):
+        candidates = v.generate_stone_candidates(
+            bridged, bridged_jewel, [], np.zeros_like(bridged_jewel))
+    assert len(candidates) == 60, len(candidates)
+    assert all(c.get('overflow_recovery') and c.get('supplemental_face') for c in candidates)
+    truth = np.zeros_like(bridged_jewel)
+    for face in expected:
+        truth |= face
+    for color in [(110, 25, 180), (140, 25, 30), (30, 140, 25)]:
+        for gain in [.65, 1.15]:
+            variant = np.full_like(bridged, (30, 75, 110))
+            variant[truth > 0] = color
+            variant = np.clip(variant.astype(np.float32)*gain,0,255).astype(np.uint8)
+            variant = np.ascontiguousarray(np.rot90(variant))
+            rotated_truth = np.ascontiguousarray(np.rot90(truth))
+            rotated_jewel = np.ascontiguousarray(np.rot90(bridged_jewel))
+            faces = v._non_gold_color_components(variant, rotated_jewel, np.zeros_like(rotated_jewel))
+            union = np.zeros_like(rotated_jewel)
+            for face in faces:
+                union |= face['mask']
+            assert np.mean(union[rotated_truth > 0] > 0) >= .95, (color,gain)
+            assert not np.any(union[rotated_truth == 0]), (color,gain)
+    print('Passed: crowded/bridged beads, six color/light/rotation variants; metal, glare, shadows and thin cord excluded.')
 
 
 if __name__ == '__main__':

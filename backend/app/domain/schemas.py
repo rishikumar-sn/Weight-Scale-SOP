@@ -14,6 +14,7 @@ class NormalizedRoi(BaseModel):
 
 class RoiSettings(BaseModel):
     processing: NormalizedRoi | None = None
+    testbed_guide: NormalizedRoi | None = None
     apriltag: NormalizedRoi | None = None
 
 

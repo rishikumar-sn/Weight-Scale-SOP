@@ -21,6 +21,7 @@ class TestbedRoi:
     processing_roi: dict[str, int]
     confidence: float
     hole_validation: dict[str, Any] | None = None
+    selection_validation: dict[str, Any] | None = None
 
 
 class TestbedSegmenter:
@@ -73,7 +74,8 @@ class TestbedSegmenter:
         # their existing mask behavior when circle exclusion is enabled.
         self.fill_platform_holes = not exclude_circle or self.circle_class_id is not None
 
-    def segment(self, image_bgr: np.ndarray, *, apriltag: dict[str, Any] | None = None) -> TestbedRoi:
+    def segment(self, image_bgr: np.ndarray, *, apriltag: dict[str, Any] | None = None,
+                guide: dict[str, int] | None = None) -> TestbedRoi:
         if image_bgr is None or image_bgr.ndim != 3 or image_bgr.shape[2] != 3:
             raise ValueError("Testbed segmentation requires a BGR colour image")
 
@@ -84,10 +86,9 @@ class TestbedSegmenter:
         prediction, prototypes = outputs[:2]
         if prediction.shape[1] != 4 + len(self.names) + prototypes.shape[1]:
             raise RuntimeError(f"Unsupported segmentation outputs: {prediction.shape}, {prototypes.shape}")
-        row, box, confidence = self._best_detection(prediction)
         coefficient_start = 4 + len(self.names)
-        source_mask = self._decode_mask(row[coefficient_start:], prototypes, box, transform, image_bgr.shape[:2])
-        source_mask = self._clean_mask(source_mask, fill_holes=self.fill_platform_holes)
+        hole = None
+        hole_validation = None
         if self.circle_class_id is not None:
             circle_row, circle_box, hole_validation = self._anchored_circle(
                 prediction, prototypes, transform, image_bgr.shape[:2], apriltag
@@ -95,8 +96,11 @@ class TestbedSegmenter:
             hole = self._decode_mask(circle_row[coefficient_start:], prototypes, circle_box,
                                      transform, image_bgr.shape[:2])
             hole = self._single_hole_mask(hole)
-            if not np.any(hole & source_mask):
-                raise RuntimeError("Detected circular hole does not overlap the testbed; recapture")
+        source_mask, confidence, selection_validation = self._select_testbed(
+            prediction, prototypes, transform, image_bgr.shape[:2], apriltag, hole, guide
+        )
+        source_mask = self._clean_mask(source_mask, fill_holes=self.fill_platform_holes)
+        if hole is not None:
             # Fill missing hole pixels, then expand its boundary so its rim cannot
             # become jewellery. Subtract AFTER platform closing/erosion.
             contours, _ = cv2.findContours(hole, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -109,7 +113,81 @@ class TestbedSegmenter:
         roi = self._square_roi(image_bgr, source_mask, confidence)
         return TestbedRoi(roi.image, roi.mask, roi.source_mask, roi.source_roi,
                           roi.processing_roi, roi.confidence,
-                          hole_validation if self.circle_class_id is not None else None)
+                          hole_validation, selection_validation)
+
+    def _select_testbed(self, prediction, prototypes, transform, source_shape,
+                        apriltag, hole=None, guide=None):
+        """Physical anchors establish validity; a loose guide only breaks close ties.
+
+        Check the filled outer contour before trimming the rim or subtracting the
+        tag/fixture. A segmentation can legitimately omit their interior pixels.
+        Never clip the selected mask to the guide, even when the guide is stale.
+        """
+        points = np.asarray((apriltag or {}).get("corners", []), dtype=np.float64)
+        if (not (apriltag or {}).get("found") or points.shape != (4, 2)
+                or not np.isfinite(points).all()
+                or abs(cv2.contourArea(points.astype(np.float32))) < 1):
+            raise RuntimeError("Keep the AprilTag visible and recapture.")
+        height, width = source_shape
+        pixels = np.rint(points).astype(np.int32)
+        if (np.any(pixels < 0) or np.any(pixels[:, 0] >= width)
+                or np.any(pixels[:, 1] >= height)):
+            raise RuntimeError("Keep the entire AprilTag inside the image and recapture.")
+        rows = np.asarray(prediction)[0].T
+        scores = rows[:, 4 + self.testbed_class_id]
+        valid = np.flatnonzero(np.isfinite(rows).all(axis=1)
+                               & (scores >= self.confidence_threshold)
+                               & (rows[:, 2] > 0) & (rows[:, 3] > 0))
+        if not len(valid):
+            self._best_detection(prediction)  # Preserve the confidence diagnostic.
+        boxes = [[float(rows[i, 0] - rows[i, 2] / 2),
+                  float(rows[i, 1] - rows[i, 3] / 2),
+                  float(rows[i, 2]), float(rows[i, 3])] for i in valid]
+        # Collapse near-identical proposals before decoding full-resolution masks.
+        keep = cv2.dnn.NMSBoxes(boxes, scores[valid].tolist(), 0.0, .85)
+        candidates = []
+        for offset in np.asarray(keep).reshape(-1):
+            index = valid[int(offset)]
+            row = rows[index]
+            cx, cy, w, h = row[:4]
+            box = np.array([cx-w/2, cy-h/2, cx+w/2, cy+h/2], np.float32)
+            mask = self._decode_mask(row[4 + len(self.names):], prototypes, box,
+                                     transform, source_shape)
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            # Only one connected physical tray can contain both anchors.
+            for contour in contours:
+                if not all(cv2.pointPolygonTest(contour, tuple(map(float, point)), False) >= 0
+                           for point in points):
+                    continue
+                outer = np.zeros(source_shape, np.uint8)
+                cv2.drawContours(outer, [contour], -1, 1, cv2.FILLED)
+                hole_share = None
+                if hole is not None:
+                    hole_share = float(np.count_nonzero(hole & outer) / max(1, np.count_nonzero(hole)))
+                    if hole_share < .95:
+                        continue
+                guide_share = 0.0
+                if guide:
+                    x1, y1 = max(0, guide["x"]), max(0, guide["y"])
+                    x2 = min(width, guide["x"] + guide["w"])
+                    y2 = min(height, guide["y"] + guide["h"])
+                    if x2 > x1 and y2 > y1:
+                        guide_share = float(np.count_nonzero(outer[y1:y2, x1:x2])
+                                            / max(1, np.count_nonzero(outer)))
+                confidence = float(scores[index])
+                # At most two confidence points: the optional reference cannot
+                # rescue invalid anchors or outweigh a clear model preference.
+                rank = confidence + .02 * guide_share
+                evidence = {"anchor": "apriltag_and_circle" if hole is not None else "apriltag",
+                            "tag_inside": True, "hole_inside_share": hole_share,
+                            "guide_applied": bool(guide), "guide_overlap_share": guide_share,
+                            "guide_bonus": .02 * guide_share}
+                candidates.append((rank, confidence, mask & outer, evidence))
+        if not candidates:
+            raise RuntimeError("No testbed contains the AprilTag and required tray fixture; recapture.")
+        _, confidence, mask, evidence = max(candidates, key=lambda candidate: candidate[:2])
+        evidence["valid_candidates"] = len(candidates)
+        return mask, confidence, evidence
 
     def _anchored_circle(self, prediction, prototypes, transform, source_shape, apriltag):
         """Locate the fixed Essae fixture in AprilTag coordinates, not by score alone.

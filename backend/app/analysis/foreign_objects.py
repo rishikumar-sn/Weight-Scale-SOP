@@ -11,7 +11,10 @@ from .testbed_segmentation import TestbedSegmenter
 
 FOREIGN_OBJECT_THRESHOLDS = {"foreign_obj": 0.45, "plastic_packet": 0.35, "paper": 0.15}
 OBJECT_THRESHOLDS = {"coin": 0.50, "bar": 0.50}
-JEWELLERY_INSTANCE_THRESHOLD = 0.50
+# Positive support is permissive; explicit anomaly detections remain decisive.
+JEWELLERY_INSTANCE_THRESHOLD = 0.30
+# Lower-confidence support must not create new "objects together" rejections.
+JEWELLERY_PLACEMENT_THRESHOLD = 0.50
 
 
 def object_warning(label: str) -> str:
@@ -64,19 +67,24 @@ class ForeignObjectDetector(TestbedSegmenter):
         self.names = ({int(key): value for key, value in names.items()}
                       if isinstance(names, dict) else dict(enumerate(names)))
         classes = set(self.names.values())
-        if classes not in ({*FOREIGN_OBJECT_THRESHOLDS, "jewellery"},
-                           {*FOREIGN_OBJECT_THRESHOLDS, *OBJECT_THRESHOLDS, "jewellery"}):
-            raise RuntimeError(f"Unexpected foreign-object model classes: {self.names}")
+        if len(self.names) != 6 or classes != {*FOREIGN_OBJECT_THRESHOLDS, *OBJECT_THRESHOLDS, "jewellery"}:
+            raise RuntimeError(f"The six-class coin/bar segmentation model is required; got: {self.names}")
         if set(self.names) != set(range(len(self.names))):
             raise RuntimeError("Foreign-object model class indices must be contiguous")
 
     def detect(self, image_bgr: np.ndarray, testbed_mask: np.ndarray, *,
-               components: list[dict] | None = None) -> dict:
+               components: list[dict] | None = None, camera_rotation: int = 0) -> dict:
         if image_bgr is None or image_bgr.ndim != 3 or image_bgr.shape[2] != 3:
             raise ValueError("Foreign-object detection requires the raw BGR capture")
         if testbed_mask is None or testbed_mask.shape != image_bgr.shape[:2] or not np.any(testbed_mask):
             raise ValueError("Foreign-object detection requires the full-frame testbed mask")
-        tensor, transform = self._preprocess(image_bgr)
+        # Captures are stored after the display rotation. Infer in the sensor's
+        # orientation, then restore masks before polygon/component association.
+        if camera_rotation % 90:
+            raise ValueError("Camera rotation must be a multiple of 90 degrees")
+        turns = (camera_rotation % 360) // 90
+        inference_image = np.ascontiguousarray(np.rot90(image_bgr, turns)) if turns else image_bgr
+        tensor, transform = self._preprocess(inference_image)
         outputs = self.session.run(None, {self.input_name: tensor})
         if len(outputs) != 2:
             raise RuntimeError("Foreign-object model must return detections and mask prototypes")
@@ -117,7 +125,9 @@ class ForeignObjectDetector(TestbedSegmenter):
                 x, y, width, height = boxes[local_index]
                 box = np.array([x, y, x + width, y + height], dtype=np.float32)
                 mask = self._decode_mask(row[4 + class_count:], prototypes, box,
-                                         transform, image_bgr.shape[:2])
+                                         transform, inference_image.shape[:2])
+                if turns:
+                    mask = np.ascontiguousarray(np.rot90(mask, -turns))
                 overlap = (mask > 0) & (testbed_mask > 0)
                 if not np.any(overlap):
                     continue
@@ -138,6 +148,9 @@ class ForeignObjectDetector(TestbedSegmenter):
                 else:
                     detections.append(detection)
         result = {"passed": not detections, "model": str(self.model_path),
+                "model_classes": dict(self.names), "model_class_count": len(self.names),
+                "inference_rotation_degrees": (-camera_rotation) % 360,
+                "inference_shape": list(inference_image.shape),
                 "thresholds": dict(FOREIGN_OBJECT_THRESHOLDS), "detections": detections,
                 "region_filter": "segmentation_mask_intersects_testbed_polygon",
                 "input_image": "raw_full_frame",
@@ -146,6 +159,7 @@ class ForeignObjectDetector(TestbedSegmenter):
         result["recognized_objects"] = recognized_objects
         result["object_thresholds"] = dict(OBJECT_THRESHOLDS)
         if components is not None:
+            result["jewellery_threshold"] = JEWELLERY_INSTANCE_THRESHOLD
             result["jewellery_instances"] = jewellery_instances
             result["foreign_component_indices"] = sorted({
                 match["component_index"] for detection in detections
@@ -177,6 +191,8 @@ class ForeignObjectDetector(TestbedSegmenter):
     def _placement_check(instances: list[dict]) -> dict:
         by_component: dict[int, list[dict]] = {}
         for instance in instances:
+            if float(instance.get("confidence", 0.0)) < JEWELLERY_PLACEMENT_THRESHOLD:
+                continue
             overlaps = instance["component_overlaps"]
             total = sum(match["pixels"] for match in overlaps)
             if not total:
@@ -192,4 +208,4 @@ class ForeignObjectDetector(TestbedSegmenter):
                 affected.append({"component_index": index, "instance_count": len(matches)})
         return {"passed": not affected, "affected_components": affected,
                 "method": "multiple_jewellery_instances_in_one_foreground_component",
-                "confidence_threshold": JEWELLERY_INSTANCE_THRESHOLD}
+                "confidence_threshold": JEWELLERY_PLACEMENT_THRESHOLD}

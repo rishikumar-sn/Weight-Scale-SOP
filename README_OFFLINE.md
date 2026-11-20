@@ -166,7 +166,7 @@ or scale. It fails if a model tries to contact an external service.
 
 ## Anomaly detection for both scale models
 
-`models/segmentation/anomolies.onnx` is shared by ESSAE JX500 and EMBSYS WM.
+`models/segmentation/anomalies.onnx` is shared by ESSAE JX500 and EMBSYS WM.
 It loads during backend startup. The Linux launcher checks that the
 anomaly and both testbed model files are present before starting the app.
 For captures containing jewellery, the anomaly gate runs even when another

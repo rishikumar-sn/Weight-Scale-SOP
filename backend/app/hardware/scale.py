@@ -88,7 +88,15 @@ class ScaleService:
         serial_number = getattr(port, "serial_number", None)
         return f"{getattr(port, 'vid', None)}:{getattr(port, 'pid', None)}:{serial_number}" if serial_number else ""
 
-    def _select_essae_port(self) -> str:
+    @staticmethod
+    def _is_ch340(port) -> bool:
+        return (
+            "CH340" in (getattr(port, "description", "") or "").upper()
+            or (getattr(port, "vid", None), getattr(port, "pid", None)) == (0x1A86, 0x7523)
+            or "1A86:7523" in (getattr(port, "hwid", "") or "").upper()
+        )
+
+    def _select_essae_port(self, *, prefer_ch340: bool = False) -> str:
         settings = self._settings_provider()["scale"]
         preferred = str(settings.get("port") or "")
         identity = settings.get("usb_identity", "")
@@ -98,7 +106,9 @@ class ScaleService:
                  or p.device == preferred]
         ports.sort(key=lambda p: (
             not bool(identity and self._port_identity(p) == identity),
-            p.device.casefold() != preferred.casefold(), p.device,
+            p.device.casefold() != preferred.casefold(),
+            prefer_ch340 and not self._is_ch340(p),
+            p.device,
         ))
         available = [p for p in ports if p.device not in self._failed_ports]
         if not available:
@@ -123,9 +133,7 @@ class ScaleService:
             ports.sort(key=lambda p: (
                 not bool(identity and self._port_identity(p) == identity),
                 p.device.casefold() != configured.casefold(),
-                not ("CH340" in (getattr(p, "description", "") or "").upper()
-                     or (getattr(p, "vid", None), getattr(p, "pid", None)) == (0x1A86, 0x7523)
-                     or "1A86:7523" in (getattr(p, "hwid", "") or "").upper()),
+                not self._is_ch340(p),
                 getattr(p, "vid", None) is None,
                 p.device,
             ))
@@ -136,26 +144,14 @@ class ScaleService:
             if not available:
                 raise RuntimeError("USB scale not detected; waiting for connection")
             return available[0].device
-        # Persistent aliases follow this adapter across ttyUSB number changes.
-        # Never switch an explicitly selected device to an unrelated USB port.
-        if configured.startswith("/dev/"):
+        # Explicit persistent aliases identify a particular physical adapter.
+        if configured.startswith(("/dev/serial/by-id/", "/dev/serial/by-path/")):
             return configured
-        ports = list(serial.tools.list_ports.comports())
-        if configured and any(item.device.casefold() == configured.casefold() for item in ports):
+        if configured.startswith("/dev/") and not configured.startswith(("/dev/ttyUSB", "/dev/ttyACM")):
             return configured
-        for item in ports:
-            if "CH340" in item.description.upper() or "1A86:7523" in item.hwid.upper():
-                return item.device
-        usb_ports = [
-            item for item in ports
-            if getattr(item, "vid", None) is not None
-            or item.device.startswith(("/dev/ttyUSB", "/dev/ttyACM"))
-        ]
-        if len(usb_ports) == 1:
-            return usb_ports[0].device
-        if len(usb_ports) > 1:
-            raise RuntimeError("Multiple USB serial devices found; select the scale port in settings")
-        raise RuntimeError("USB scale not detected; waiting for connection")
+        # ttyUSB/ttyACM numbers may change after reconnecting. Prefer the saved
+        # USB identity, then the previous port, and verify with valid frames.
+        return self._select_essae_port(prefer_ch340=True)
 
     @staticmethod
     def _parse(raw: bytes) -> float | None:
@@ -232,7 +228,7 @@ class ScaleService:
                         self.on_reading(self.snapshot())
                         with self._lock:
                             self._capture_event_id = self._reading_id
-                    if (model in {"essae_jx500", "accet_cg1003l"} or os.name == "nt") and not remembered:
+                    if not remembered:
                         remembered = True
                         self._failed_ports.clear()
                         if self._remember_device:
@@ -294,7 +290,7 @@ class ScaleService:
                             continue
                     with self._lock:
                         self._port = ", ".join(connections)
-                        self._status = "Press the ACCET scale button to detect its USB port" if connections else "Waiting for ACCET USB connection"
+                        self._status = "Press the ACZET scale button to detect its USB port" if connections else "Waiting for ACZET USB connection"
                     next_scan = now + 1.0
                 for port, connection in list(connections.items()):
                     try:
@@ -358,7 +354,7 @@ class ScaleService:
                             self._error = ""
                         self._read_connection(connection, port)
                 except Exception as exc:  # noqa: BLE001
-                    if port and (self._model in {"essae_jx500", "accet_cg1003l"} or os.name == "nt"):
+                    if port:
                         self._failed_ports.add(port)
                     self._invalidate("Scale reconnecting", str(exc))
                     self._reconnect.wait(self.RECONNECT_INTERVAL_SECONDS)

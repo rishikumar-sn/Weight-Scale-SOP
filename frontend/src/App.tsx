@@ -112,12 +112,12 @@ export default function App() {
   const [cameraRotation, setCameraRotation] = useState(-90);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsNotice, setSettingsNotice] = useState("");
-  const [drawingTarget, setDrawingTarget] = useState<"processing" | "apriltag" | null>(null);
-  const [draftRois, setDraftRois] = useState<{ processing: Roi | null; apriltag: Roi | null }>({ processing: null, apriltag: null });
-  const dragRef = useRef<{ x: number; y: number; target: "processing" | "apriltag" } | null>(null);
+  const [drawingTarget, setDrawingTarget] = useState<"processing" | "apriltag" | "testbed_guide" | null>(null);
+  const [draftRois, setDraftRois] = useState<{ processing: Roi | null; apriltag: Roi | null; testbed_guide?: Roi | null }>({ processing: null, apriltag: null });
+  const dragRef = useRef<{ x: number; y: number; target: "processing" | "apriltag" | "testbed_guide" } | null>(null);
   const settingsButtonRef = useRef<HTMLButtonElement>(null);
   const closeSettingsRef = useRef<HTMLButtonElement>(null);
-  const [rois, setRois] = useState<{ processing: Roi | null; apriltag: Roi | null }>({
+  const [rois, setRois] = useState<{ processing: Roi | null; apriltag: Roi | null; testbed_guide?: Roi | null }>({
     processing: null,
     apriltag: null,
   });
@@ -348,10 +348,12 @@ export default function App() {
       context.lineWidth = 1;
       context.strokeRect(x, y, width, height);
     };
-    const shown = setupOpen && settingsSection === "areas" ? draftRois : rois;
-    if (captureTab === "jewellery") render(shown.apriltag, "#6bc9aa");
-    if (setupOpen && settingsSection === "areas") render(shown.processing, "#edbc63");
-  }, [rois, draftRois, setupOpen, settingsSection, videoContentRect, captureTab]);
+    if (setupOpen && settingsSection === "areas") {
+      render(draftRois.testbed_guide ?? null, "#edbc63");
+      if (drawingTarget === "apriltag") render(draftRois.apriltag, "#6bc9aa");
+      if (drawingTarget === "processing") render(draftRois.processing, "#8cb8ee");
+    }
+  }, [draftRois, setupOpen, settingsSection, videoContentRect, drawingTarget]);
 
   useEffect(() => {
     drawRois();
@@ -412,7 +414,7 @@ export default function App() {
       setSettings(data);
       setRois(data.rois);
       setDrawingTarget(null);
-      setSettingsNotice(settings?.camera?.anti_flicker_mode === "adaptive" ? "Camera areas saved. Adaptive metering restarts if its area changed." : "Camera areas saved.");
+      setSettingsNotice("Camera areas saved. The guide is optional and appears only in these settings.");
     } catch (reason: any) { setSettingsNotice(`Could not save: ${reason.message}`); }
     finally { setSettingsSaving(false); }
   }
@@ -811,7 +813,7 @@ export default function App() {
             <div className="settingsLayout">
               <nav className="settingsNav" aria-label="Settings categories">
                 <button aria-current={settingsSection === "flicker" ? "page" : undefined} onClick={() => { setSettingsSection("flicker"); setDrawingTarget(null); setSettingsNotice(""); }}>Camera flicker</button>
-                <button aria-current={settingsSection === "areas" ? "page" : undefined} onClick={() => { setSettingsSection("areas"); setSettingsNotice(""); }}>Camera areas</button>
+                <button aria-current={settingsSection === "areas" ? "page" : undefined} onClick={() => { setSettingsSection("areas"); setSettingsNotice(""); }}>Testbed guide area</button>
                 <button aria-current={settingsSection === "rotation" ? "page" : undefined} onClick={() => { setSettingsSection("rotation"); setDrawingTarget(null); dragRef.current = null; setSettingsNotice(""); }}>Camera rotation</button>
                 <button aria-current={settingsSection === "scale" ? "page" : undefined} onClick={() => { setSettingsSection("scale"); setDrawingTarget(null); dragRef.current = null; setSettingsNotice(""); }}>Weight scale</button>
                 <button aria-current={settingsSection === "stones" ? "page" : undefined} onClick={() => { setSettingsSection("stones"); setDrawingTarget(null); dragRef.current = null; setSettingsNotice(""); }}>Stone analysis</button>
@@ -873,10 +875,11 @@ export default function App() {
                   <button className="primary" disabled={settingsSaving || markerRefreshing || cameraReconnecting || busy || stage === "processing"} onClick={saveRotation}>{settingsSaving ? "Applying…" : "Apply rotation"}</button>
                   {(busy || stage === "processing") && <p>Camera changes are available when the current capture finishes.</p>}
                 </> : <>
-                  <h3>Camera areas</h3><p>The testbed is detected automatically at capture time. Draw a marker search area or a lighting metering area on the live camera.</p>
+                  <h3>Testbed guide area</h3><p>The tray is detected automatically using its marker and fixture. Optionally draw a loose rectangle around the tray to help selection. It can be larger than the tray; parts of the tray may extend outside it. This guide never crops the capture and is visible only here.</p>
+                  <div className="areaOption"><strong>Optional testbed guide</strong><p>Capture works without a guide. The marker and tray geometry remain the main evidence.</p><button className="secondary" disabled={settingsSaving || !live.camera?.connected} aria-pressed={drawingTarget === "testbed_guide"} onClick={() => setDrawingTarget("testbed_guide")}>Draw guide area</button><button className="textButton" disabled={settingsSaving} onClick={() => { setDraftRois(current => ({ ...current, testbed_guide: null })); setDrawingTarget(null); }}>Clear guide</button></div>
                   <div className="areaOption"><strong>Marker search area</strong><p>Include the entire AprilTag with a little space around it.</p><button className="secondary" disabled={settingsSaving || !live.camera?.connected} aria-pressed={drawingTarget === "apriltag"} onClick={() => setDrawingTarget("apriltag")}>Draw marker area</button><button className="textButton" disabled={markerRefreshing || !cameraReady || settingsSaving || busy || stage === "processing"} onClick={async () => { const data = await refreshMarkerRoi(false); if (data) setDraftRois(current => ({ ...current, apriltag: data.roi })); }}>{markerRefreshing ? "Detecting…" : "Auto-detect and save marker"}</button></div>
                   <div className="areaOption"><strong>Lighting metering area</strong><p>Used by adaptive shutter control. Leave empty to meter the centre of the image.</p><button className="secondary" disabled={settingsSaving || !live.camera?.connected} aria-pressed={drawingTarget === "processing"} onClick={() => setDrawingTarget("processing")}>Draw metering area</button><button className="textButton" disabled={settingsSaving} onClick={() => setDraftRois(current => ({ ...current, processing: null }))}>Use default area</button></div>
-                  {drawingTarget && <p className="drawingHint" role="status">Drag on the live camera to draw the {drawingTarget === "apriltag" ? "marker search" : "lighting metering"} area. Then save your areas.</p>}
+                  {drawingTarget && <p className="drawingHint" role="status">Drag on the live camera to draw the {drawingTarget === "apriltag" ? "marker search" : drawingTarget === "testbed_guide" ? "testbed guide" : "lighting metering"} area. Then save your areas.</p>}
                   <button className="primary" disabled={settingsSaving || busy || stage === "processing"} onClick={saveAreas}>{settingsSaving ? "Saving…" : "Save camera areas"}</button>
                 </>}
                 {settingsNotice && <p className="settingsNotice" role="status">{settingsNotice}</p>}

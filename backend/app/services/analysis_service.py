@@ -17,10 +17,12 @@ from PIL import Image
 
 from ..analysis.annotations import (identify_result_image, jewel_reference,
                                     render_bead_evidence, render_capture_review)
+from ..analysis.small_footprint import small_footprint_fallback
 from ..analysis.bangle_orientation import detect_bangle_orientation
 from ..analysis.bangle_placement import check_bangle_placement, PLACEMENT_MESSAGE
 from ..analysis.beads import analyze_bead_detections, onnx_image_size, prepare_onnx_input
 from ..analysis.vision import separate_jewellery_items
+from ..analysis.marker_continuity import resolve_marker_fragments, MARKER_PLACEMENT_MESSAGE
 from ..analysis.rim_filter import (
     rim_candidates, remap_component_check, SIGLIP_JEWELLERY_VETO_CONFIDENCE,
 )
@@ -505,15 +507,17 @@ class AnalysisService:
         testbed_mask = cv2.imread(paths.get("testbed_source_mask", ""), cv2.IMREAD_GRAYSCALE)
         if raw is None or testbed_mask is None:
             raise RuntimeError("The raw capture or full-frame testbed mask is unavailable; recapture.")
+        camera_rotation = int((state.get("settings_snapshot", {}).get("camera") or {}).get("rotation", 0))
+        orientation = {"camera_rotation": camera_rotation} if camera_rotation else {}
         if separated is None:
-            return self._get_foreign_objects().detect(raw, testbed_mask)
+            return self._get_foreign_objects().detect(raw, testbed_mask, **orientation)
         origin = state["rois"]["processing"]
         components = [
             {"bbox": {**item["bbox"], "x": item["bbox"]["x"] + origin["x"],
                       "y": item["bbox"]["y"] + origin["y"]}, "mask": item["mask"]}
             for item in separated
         ]
-        return self._get_foreign_objects().detect(raw, testbed_mask, components=components)
+        return self._get_foreign_objects().detect(raw, testbed_mask, components=components, **orientation)
 
     def _check_bangle_placement(self, item: dict[str, Any], label: str) -> dict[str, Any]:
         if label_key(label) != "bangle":
@@ -560,14 +564,22 @@ class AnalysisService:
 
     def _exclude_verified_rim_strips(self, state: dict, separated: list[dict],
                                     check: dict, testbed_mask: np.ndarray | None) -> tuple[list[dict], dict]:
+        original_path = (state.get("paths") or {}).get("original")
+        original_frame = cv2.imread(str(original_path)) if original_path else None
+        roi = (state.get("rois") or {}).get("processing") or {}
+        # Read actual pixels beyond the white-backed working testbed crop.
         evidence = rim_candidates(separated, check, testbed_mask,
-                                  state.get("calibration"), state.get("testbed"))
+                                  state.get("calibration"), state.get("testbed"),
+                                  original_frame, (roi.get("x", 0), roi.get("y", 0)))
         state["rim_edge_check"] = evidence
         ignored = set()
         for record in evidence["items"]:
             if not record["candidate"]:
                 continue
             index = record["source_component_index"]
+            if separated[index - 1].get("recognized_object"):
+                record["reason"] = "coin_bar_detected_by_segmentation"
+                continue
             raw = separated[index - 1]["raw_crop_bgr"]
             try:
                 # Category competition alone can call a tray strip a ring.
@@ -612,7 +624,7 @@ class AnalysisService:
                 state.get('rejection_reason') or PRINT_MESSAGE)
         for key in ("rim_edge_check", "component_presence_check", "thread_only_check",
                     "placement_check", "object_assignment_check", "rejection_regions",
-                    "rejection_kind", "rejection_reason", "real_print_check"):
+                    "rejection_kind", "rejection_reason", "real_print_check", "marker_placement_check"):
             state.pop(key, None)
         image = cv2.imread(state["paths"]["working"])
         mask = cv2.imread(state["paths"]["mask"], cv2.IMREAD_GRAYSCALE)
@@ -631,11 +643,29 @@ class AnalysisService:
             padding_px=int(settings.get("padding_px", 18)),
             valid_area_mask=valid_area_mask,
         )
+        original_path = state["paths"].get("original")
+        separated, marker_check = resolve_marker_fragments(
+            image, separated,
+            original=cv2.imread(original_path) if original_path else None,
+            processing_roi=(state.get("rois") or {}).get("processing"),
+            tag_roi=(state.get("rois") or {}).get("working_apriltag"),
+            corners=(state.get("calibration") or {}).get("corners"),
+            valid_area_mask=valid_area_mask,
+        )
+        state["marker_placement_check"] = marker_check
         state["foreground_components"] = [
             {"source_component_index": index, "bbox": item["bbox"],
              "source_bbox": source_bbox(state, item["bbox"])}
             for index, item in enumerate(separated, 1)
         ]
+        if not marker_check["passed"]:
+            # These checks have not run on this attempt; do not annotate stale
+            # anomalies from an earlier classification beside the marker error.
+            state.pop("foreign_object_check", None)
+            state.pop("other_objects", None)
+            return self._reject_unverified_capture(
+                state, "marker_placement", MARKER_PLACEMENT_MESSAGE,
+            )
         try:
             check = (self._check_foreign_objects(state, separated)
                      if self._model_enabled(state, "foreign_objects") else self._skipped_check())
@@ -818,12 +848,17 @@ class AnalysisService:
             else:
                 crop_rgb = cv2.cvtColor(separated_item["crop_bgr"], cv2.COLOR_BGR2RGB)
                 prediction = classifier.classify_image(Image.fromarray(crop_rgb), image_path=str(crop_path))
+            footprint_label, footprint_fallback = small_footprint_fallback(
+                prediction.label, prediction.scores, separated_item["mask"],
+                state.get("calibration"), gallery_match=prediction.gallery_match,
+            )
             predicted_label, dimension_fallback = _ring_bangle_dimension_fallback(
-                prediction.label,
+                footprint_label,
                 separated_item["mask"],
                 state.get("calibration"),
             )
-            decision_source = prediction.decision_source
+            decision_source = ("small_footprint_fallback" if footprint_fallback["applied"]
+                               else prediction.decision_source)
             if dimension_fallback["applied"]:
                 decision_source = "dimension_ring_bangle_fallback"
             classified_items.append({
@@ -845,10 +880,12 @@ class AnalysisService:
                 "classifier_label": prediction.label,
                 "classifier_decision_source": prediction.decision_source,
                 "dimension_fallback": dimension_fallback,
+                "small_footprint_fallback": footprint_fallback,
                 "semantic_validation_reason": semantic_reason,
                 "confirmed_label": None,
                 "confirmed": False,
-                "confidence": float(prediction.confidence),
+                "confidence": (footprint_fallback["candidate_confidence"] if footprint_fallback["applied"]
+                               else float(prediction.confidence)),
                 "gallery_match": bool(prediction.gallery_match),
                 "gallery_similarity": float(prediction.gallery_similarity),
                 "gallery_support": int(prediction.gallery_support),
@@ -1301,12 +1338,9 @@ class AnalysisService:
         label = (item or {}).get("confirmed_label") or (state.get("classification") or {}).get("confirmed_label")
         if label_key(label) in {"finger ring", "ring"}:
             return {"applicable": False, "status": "skipped", "reason": "Analysis is disabled for finger rings."}
-        # Keep the real weighing-platform pixels available to the stone
-        # pipeline.  The prepared image replaces everything outside the Otsu
-        # mask with pure white, which prevents the background-match cleanup
-        # from learning the platform colour and rejecting background pixels
-        # that leaked inside the mask.  The external mask below remains the
-        # hard boundary for all jewellery and stone regions.
+        # Preserve the established segmentation input. Raw platform context is
+        # supplied separately below for final gap/material verification; the
+        # working/prepared item is white-composited outside its mask.
         paths = (item or {}).get("paths") or state["paths"]
         image = cv2.imread(paths["working"])
         mask = cv2.imread(paths["mask"], cv2.IMREAD_GRAYSCALE)
@@ -1372,9 +1406,15 @@ class AnalysisService:
             raise RuntimeError("Original full-resolution capture is unavailable for stone color analysis")
         from StoneDetection.gemstone_colors import original_color_crop
         original_color = original_color_crop(original, ox, oy, image.shape[:2])
+        verification_image = cv2.imread(paths["raw"]) if paths.get("raw") else None
+        if verification_image is None or verification_image.shape != image.shape:
+            # Legacy/imported sessions may omit their independent raw crop.
+            # The existing native-capture mapping is an aligned raw reference.
+            verification_image = original_color
         analysis = stone_detection.analyze_image_bgr(
             image,
             original_color_bgr=original_color,
+            verification_image_bgr=verification_image,
             source_name=paths["prepared"],
             zoom_scale=1,
             preset_candidates=preset_candidates,

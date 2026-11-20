@@ -1,5 +1,14 @@
 # Foreground verification — 31 October 2026
 
+> **Active installation policy — 11 November 2026:** the user chose to skip
+> positive jewellery verification. `models.component_presence` is **false** in
+> the running installation; anomaly detection and all other existing checks
+> remain enabled. New captures do not require a jewellery-instance confidence
+> or pixel-overlap pass. The optional diagnostic/gate implementation below is
+> retained and can be re-enabled in Model Settings. The 0.30 mask decoder is
+> informational for this policy. See
+> `testing/anomaly-only-policy-20261111/report.md` in the installation root.
+
 ## Implemented behavior
 
 **2 November update:** the calibrated [tray-rim filter](RIM_EDGE_FILTER.md)
@@ -13,8 +22,17 @@ Otsu connected components are proposals, not confirmed jewellery identities.
 Before thread classification, SigLIP, dimension fallback or gallery learning,
 each component must have at least **20% of its foreground pixels supported by
 a detected jewellery-instance mask**. The existing anomaly model provides these
-masks at its unchanged 0.50 jewellery confidence threshold. This uses pixel
-overlap, not enclosing rectangle overlap.
+masks at a **0.30 jewellery confidence threshold** (updated 11 November 2026;
+the original audit below used 0.50). This uses pixel overlap, not enclosing
+rectangle overlap. The 20% foreground support requirement is unchanged.
+
+Explicit anomaly thresholds remain `foreign_obj: 0.45`, `plastic_packet: 0.35`,
+`paper: 0.15`; coin/bar thresholds remain 0.50. Jewellery confidence from 0.30 to
+0.50 can supply positive presence evidence, but cannot create additional
+multiple-instance placement rejections: that check retains its 0.50 threshold.
+Real/print, thread and semantic verification still run after presence passes.
+The change and before/after replays are documented in
+`testing/jewellery-confidence-20261111/report.md` in the installation root.
 
 An unsupported component rejects the entire capture as `unverified_foreground`:
 no J labels, no jewellery types, no analysis and no correction learning. The app

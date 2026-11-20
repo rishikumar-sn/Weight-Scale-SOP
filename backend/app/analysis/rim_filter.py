@@ -18,8 +18,77 @@ MIN_STRIP_ASPECT = 3.0
 SIGLIP_JEWELLERY_VETO_CONFIDENCE = 0.70
 
 
+def _continuing_rim(item, outer, distance, scales, frame, origin, record):
+    """Require a visible rail extending 10 mm past BOTH proposal endpoints.
+
+    This handles broad coloured tray lips without treating arbitrary brown or
+    near-border objects as background. Use original pixels, never white padding.
+    Any missing, clipped or inconsistent observation preserves the component.
+    """
+    if frame is None or frame.ndim != 3 or frame.shape[2] != 3:
+        return False
+    mask = (item['mask'] > 0).astype(np.uint8)
+    x, y, w, h = (int(item['bbox'][k]) for k in ('x', 'y', 'w', 'h'))
+    fx, fy = x + origin[0], y + origin[1]
+    raw = item.get('raw_crop_bgr')
+    if (not isinstance(fx, (int, np.integer)) or not isinstance(fy, (int, np.integer))
+            or fx < 0 or fy < 0 or fx+w > frame.shape[1] or fy+h > frame.shape[0]
+            or raw is None or raw.shape != (h, w, 3)
+            or not np.array_equal(frame[fy:fy+h, fx:fx+w][mask > 0], raw[mask > 0])):
+        return False
+    values = distance[y:y+h, x:x+w][mask > 0]
+    scale = float(scales.max())
+    limit = min(10.0 / scale, min(outer.shape) * 0.06)
+    if values.max() > limit or np.any(outer[y:y+h, x:x+w][mask > 0] == 0):
+        return False
+    (cx, cy), (a, b), angle = cv2.minAreaRect(cv2.findNonZero(mask))
+    if a < b:
+        a, b, angle = b, a, angle + 90
+    if (b+1)*scale > 7.0 or (a+1)/(b+1) < 8 or values.max()-values.min() > (b+1)*1.5:
+        return False
+    _, hierarchy = cv2.findContours(mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+    if hierarchy is not None and np.any(hierarchy[0, :, 3] >= 0):
+        return False
+    theta = np.deg2rad(angle)
+    along = np.array([np.cos(theta), np.sin(theta)])
+    across = np.array([-along[1], along[0]])
+    centre = np.array([x+cx+origin[0], y+cy+origin[1]])
+    extension = 10.0 / scale
+    # Skip 1 mm at the endpoints to avoid the same proposal's antialiasing.
+    gap = 1.0 / float(scales.min())
+    if gap >= extension:
+        return False
+    sections = [np.linspace(-a*.3, a*.3, 80),
+                np.linspace(-a/2-extension, -a/2-gap, 50),
+                np.linspace(a/2+gap, a/2+extension, 50)]
+    profiles, patches = [], []
+    for offsets in sections:
+        depth = np.arange(-b/2-8, b/2+9)
+        coords = centre + offsets[None, :, None]*along + depth[:, None, None]*across
+        if (coords[..., 0].min() < 0 or coords[..., 1].min() < 0
+                or coords[..., 0].max() >= frame.shape[1]-1
+                or coords[..., 1].max() >= frame.shape[0]-1):
+            return False
+        patch = cv2.remap(frame, coords[..., 0].astype(np.float32),
+                          coords[..., 1].astype(np.float32), cv2.INTER_LINEAR).astype(float)
+        patches.append(patch)
+        profiles.append(np.median(patch, axis=1))
+    reference = profiles[0]
+    contrast = float(np.ptp(reference.mean(axis=1)))
+    errors = [float(np.mean(np.abs(p-reference))) for p in profiles[1:]]
+    # Median agreement alone could hide an unrelated object in a side sample.
+    shares = [float(np.mean(np.mean(np.abs(p-reference[:, None, :]), axis=(0, 2)) <= 20))
+              for p in patches]
+    record['rim_continuation'] = dict(extension_mm=10.0, contrast=contrast,
+                                      band_px=float(limit), thickness_mm=(b+1)*scale,
+                                      aspect=(a+1)/(b+1),
+                                      side_profile_errors=errors, matching_column_shares=shares)
+    return contrast >= 40 and max(errors) <= 15 and min(shares) >= 0.8
+
+
 def rim_candidates(items: list[dict], check: dict, testbed_mask: np.ndarray | None,
-                   calibration: dict | None, testbed: dict | None) -> dict:
+                   calibration: dict | None, testbed: dict | None,
+                   original_frame: np.ndarray | None = None, origin: tuple = (0, 0)) -> dict:
     """Find only neutral, thin, unsupported strips at the outer polygon edge.
 
     Use foreground pixels, not padded crop boxes. Fill internal mask holes so
@@ -86,6 +155,12 @@ def rim_candidates(items: list[dict], check: dict, testbed_mask: np.ndarray | No
             continue
         values = distance[y:y+h, x:x+w][mask > 0]
         record["maximum_boundary_distance_px"] = float(values.max())
+        # Broader/coloured lips need independent image evidence of a continuing
+        # fixture. The original narrow neutral rule below remains unchanged.
+        if _continuing_rim(item, outer, distance, scales, original_frame, origin, record):
+            record.update(candidate=True, reason="continuing_outer_rim_profile")
+            result["candidate_indices"].append(index)
+            continue
         if np.any(outer[y:y+h, x:x+w][mask > 0] == 0) or values.max() > band_px:
             record["reason"] = "interior_or_ambiguous_position"
             continue

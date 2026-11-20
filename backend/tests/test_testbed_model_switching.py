@@ -30,11 +30,11 @@ def test_apply_switches_models_releases_previous_and_restores_on_startup(tmp_pat
         assert saved["scale"]["model"] == model
         assert service._get_testbed_segmenter() is service._testbed_segmenter
         previous = weakref.ref(service._testbed_segmenter)
-    assert loaded == [(TESTBED_MODEL_PATHS["embsys_wm"], 2, 0.0, True),
+    assert loaded == [(TESTBED_MODEL_PATHS["embsys_wm"], 2, 0.0, False),
                       (TESTBED_MODEL_PATHS["essae_jx500"], 12, 0.035, True),
                       (TESTBED_MODEL_PATHS["accet_cg1003l"], 2, 0.035, False),
                       (TESTBED_MODEL_PATHS["essae_jx500"], 12, 0.035, True),
-                      (TESTBED_MODEL_PATHS["embsys_wm"], 2, 0.0, True)]
+                      (TESTBED_MODEL_PATHS["embsys_wm"], 2, 0.0, False)]
     service._testbed_segmenter = None
     restarted = service_for_settings(tmp_path / "settings.json")
     assert restarted._get_testbed_segmenter().model_path == TESTBED_MODEL_PATHS["embsys_wm"]

@@ -121,6 +121,129 @@ def is_warm_metal_shadow(color: str, image_bgr: np.ndarray, mask: np.ndarray) ->
     return float(np.mean(warm_shadow)) >= 0.60
 
 
+def build_material_context(image_bgr: np.ndarray, jewel_mask: np.ndarray) -> dict[str, Any]:
+    """Cache unnormalized colour and real platform statistics once per jewel."""
+    hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
+    lab = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+    hue, saturation, value = cv2.split(hsv)
+    warm = (hue >= 6) & (hue <= 45) & (saturation >= 65)
+    chromatic = ((hue < 6) | (hue > 45)) & (saturation >= 65) & (value >= 30)
+    outside = jewel_mask == 0
+    # Ignore artificial white padding when a real platform sample is present.
+    sample = outside & (np.min(image_bgr, axis=2) < 250)
+    center = None
+    close = None
+    if np.count_nonzero(sample) >= 24:
+        center = np.median(lab[sample], axis=0)
+        delta = lab - center
+        close = ((np.abs(delta[:, :, 0]) <= 14)
+                 & (np.linalg.norm(delta[:, :, 1:], axis=2) <= 7))
+    return dict(hsv=hsv, lab=lab, warm=warm, chromatic=chromatic,
+                background_center=center, background_close=close)
+
+
+def stone_material_evidence(
+    image_bgr: np.ndarray, mask: np.ndarray, jewel_mask: np.ndarray,
+    context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Measure raw material cues without modifying a candidate or its pixels."""
+    valid = mask > 0
+    if not np.any(valid):
+        return {}
+    context = context if context is not None else build_material_context(image_bgr, jewel_mask)
+    hsv, lab = context['hsv'], context['lab']
+    warm, chromatic = context['warm'], context['chromatic']
+    value = hsv[:, :, 2]
+    surround = (_ring(mask, 3) > 0) & (jewel_mask > 0)
+    center, close = context['background_center'], context['background_close']
+    background_share = float(np.mean(close[valid])) if close is not None else None
+    background_distance = float(np.median(np.linalg.norm(lab[valid] - center, axis=1))) if center is not None else None
+    return {
+        'warm_share': round(float(np.mean(warm[valid])), 4),
+        'dark_warm_share': round(float(np.mean((warm & (value <= 110))[valid])), 4),
+        'chromatic_share': round(float(np.mean(chromatic[valid])), 4),
+        'warm_surround_share': round(float(np.mean(warm[surround])), 4) if np.any(surround) else 0.0,
+        'median_hsv': [round(float(v), 2) for v in np.median(hsv[valid], axis=0)],
+        'value_p90': round(float(np.percentile(value[valid], 90)), 3),
+        'median_lab': [round(float(v), 2) for v in np.median(lab[valid], axis=0)],
+        'lightness_std': round(float(np.std(lab[:, :, 0][valid])), 3),
+        'background_share': round(background_share, 4) if background_share is not None else None,
+        'background_distance': round(background_distance, 3) if background_distance is not None else None,
+        'background_lab': [round(float(v), 2) for v in center] if center is not None else None,
+        **{k: round(v, 4) for k,v in _shape_metrics(mask).items()},
+    }
+
+
+def filter_false_material_instances(
+    image_bgr: np.ndarray, jewel_mask: np.ndarray,
+    instances: list[dict[str, Any]], *, zoom_scale: int = 1,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Reject independently verified gaps/metal after all growth and splitting.
+
+    This never alters seeds, accepted boundaries, proposal order or RNG state.
+    Reject whole regions only, retaining every pixel of an eligible stone.
+    Colour/enclosure alone is insufficient: dark warm metal requires a clipped,
+    dim face and a warm surround; platform gaps require neutral, uniform pixels.
+    """
+    if not instances:
+        return instances, {'enabled': True, 'rejections': [], 'removed_area_px': 0}
+    context = build_material_context(image_bgr, jewel_mask)
+    kept, rejections = [], []
+    for instance in instances:
+        evidence = stone_material_evidence(image_bgr, instance['mask'], jewel_mask, context)
+        reason = None
+        hue, saturation, value = evidence['median_hsv']
+        area = int(cv2.countNonZero(instance['mask']))
+        # Native-pixel bound prevents a tiny recess heuristic becoming a
+        # full-face rule when a caller zooms its analysis image.
+        small_face = area <= 250 * max(1, int(zoom_scale)) ** 2
+        if (small_face and hue <= 18 and saturation >= 240 and value <= 85
+                and evidence['value_p90'] <= 90
+                and evidence['lightness_std'] <= 18
+                and evidence['warm_surround_share'] >= 0.90):
+            reason = 'dim_clipped_warm_metal_recess'
+        elif (instance.get('color') == 'White/Colorless'
+              and evidence['background_share'] is not None
+              and evidence['background_share'] >= 0.65
+              and evidence['chromatic_share'] <= 0.05
+              and evidence['lightness_std'] <= 14):
+            reason = 'uniform_platform_gap'
+        elif (set(instance.get('source_methods') or ()).issubset({
+                    'structural', 'edge_enclosure', 'local_contrast', 'white_colorless_structure'})
+              and 'structural' in (instance.get('source_methods') or ())
+              and instance.get('color') == 'White/Colorless'
+              and saturation <= 45 and value <= 170
+              and evidence['lightness_std'] <= 16
+              and evidence['warm_surround_share'] <= 0.05):
+            reason = 'unsupported_neutral_hardware'
+        else:
+            classification = instance.get('color_classification') or {}
+            secondary = set(classification.get('secondary_colors') or ())
+            sources = set(instance.get('source_methods') or ())
+            # A mixed label containing only black/white votes is not chromatic
+            # stone evidence. Large, dim, poorly metal-enclosed neutral
+            # structures include earring supports. Preserve small neutral
+            # faces, dark beads, coloured faces and strongly enclosed settings.
+            if (not small_face and instance.get('color') == 'Multicolor/Color-changing'
+                    and secondary == {'Black', 'White/Colorless'}
+                    and {'structural', 'white_colorless_structure'}.issubset(sources)
+                    and 'non_gold_chromatic_face' not in sources
+                    and saturation <= 60 and 85 <= value <= 170
+                    and evidence['lightness_std'] <= 45
+                    and evidence['value_p90'] <= 190
+                    and evidence['chromatic_share'] <= 0.40
+                    and evidence['warm_surround_share'] <= 0.60):
+                reason = 'unsupported_neutral_structure'
+        if reason and not instance.get('learned_matches'):
+            rejections.append({'region_id': instance.get('region_id'),
+                'candidate_id': instance.get('candidate_id'), 'reason': reason,
+                'area_px': area, 'evidence': evidence})
+        else:
+            kept.append(instance)
+    return kept, {'enabled': True, 'rejections': rejections,
+                  'removed_area_px': sum(r['area_px'] for r in rejections)}
+
+
 def _bbox(mask: np.ndarray) -> list[int]:
     points = cv2.findNonZero(mask)
     if points is None:
@@ -1796,13 +1919,14 @@ def save_debug_artifacts(
         color = ((index * 83) % 255, (index * 151) % 255, (index * 211) % 255)
         instance_ids[mask > 0] = color
     overlay = image_bgr.copy()
-    overlay[instance_union > 0] = cv2.addWeighted(
-        overlay[instance_union > 0],
-        0.45,
-        np.full_like(overlay[instance_union > 0], (0, 0, 255)),
-        0.55,
-        0,
-    )
+    if cv2.countNonZero(instance_union):
+        overlay[instance_union > 0] = cv2.addWeighted(
+            overlay[instance_union > 0],
+            0.45,
+            np.full_like(overlay[instance_union > 0], (0, 0, 255)),
+            0.55,
+            0,
+        )
     color_labels = image_bgr.copy()
     for instance in instances:
         center_x, center_y = _centroid(instance["mask"])

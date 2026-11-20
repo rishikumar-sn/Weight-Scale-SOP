@@ -19,10 +19,10 @@ def main():
     settings = metadata['settings']
     frame = cv2.imread(str(OUT / 'control/white_stone_control.png'))
     cv2.setNumThreads(1)
-    testbed = TestbedSegmenter(ROOT / 'models/segmentation/testbed.onnx').segment(frame)
     tag = settings['apriltag']
     calibration = detect_apriltag(frame, None, int(tag['id']), float(tag['width_mm']), float(tag['height_mm']))
     calibration['available'] = True
+    testbed = TestbedSegmenter(ROOT / 'models/segmentation/testbed.onnx').segment(frame, apriltag=calibration)
     roi = apriltag_roi_from_detection(frame.shape, calibration)
     local_roi = translate_roi_to_crop(roi, testbed.processing_roi,
                                      testbed.image.shape[1], testbed.image.shape[0])

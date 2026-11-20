@@ -78,6 +78,11 @@ def rejection_regions(state: dict) -> list[dict]:
         add(f"T{item.get('item_index', number)}", label, "Place physical jewellery clearly on the tray and recapture.",
             source_bbox(state, item.get("bbox")), "thread_only")
 
+    for item in (state.get("marker_placement_check") or {}).get("affected_items", []):
+        add(f"M{item['item_index']}", "Jewellery near marker",
+            "Move jewellery away from the marker and recapture.",
+            source_bbox(state, item.get("bbox")), "marker_placement")
+
     placement = check.get("placement_check") or {}
     for item in placement.get("affected_components", []):
         index = item["component_index"]

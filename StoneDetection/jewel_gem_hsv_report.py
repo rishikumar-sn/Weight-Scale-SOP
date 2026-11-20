@@ -5087,8 +5087,16 @@ def analyze_jewel_candidate(
                     refined_strict_gold_share,
                     region.get("source_methods"),
                 ):
+                    _stone_v2_diagnostics.setdefault("color_rejections", []).append({
+                        "candidate_id": region.get("candidate_id"),
+                        "reason": "neutral_size_or_metal_overlap",
+                    })
                     continue
                 if color == "Yellow/Gold" and refined_gold_share > 0.45:
+                    _stone_v2_diagnostics.setdefault("color_rejections", []).append({
+                        "candidate_id": region.get("candidate_id"),
+                        "reason": "yellow_gold_overlap",
+                    })
                     continue
                 # Recovery masks are complete, protected proposals; regrowing
                 # them here could encroach on a previously accepted instance.
@@ -5219,14 +5227,6 @@ def analyze_jewel_candidate(
             _stone_v2_diagnostics["color_measurement_image"] = (
                 "captured_original_with_conservative_white_reference"
             )
-            if stone_v2_debug_dir is not None:
-                _stone_v2_debug_artifacts = _stone_v2.save_debug_artifacts(
-                    stone_v2_debug_dir,
-                    color_measurement_bgr,
-                    zoomed_mask,
-                    v2_candidates,
-                    regions,
-                )
         except Exception as _exc:
             _stone_v2_diagnostics = {
                 "enabled": False,
@@ -5241,6 +5241,23 @@ def analyze_jewel_candidate(
         zoomed_mask,
         regions,
     )
+
+    if _STONE_V2_AVAILABLE:
+        # Verification uses untouched camera pixels, including the platform.
+        # Keep the established analysis input, masks and area denominator fixed:
+        # changing preprocessing here would also move good stone boundaries.
+        verification_bgr = jewel.get("verification_bgr", jewel["crop_bgr"])
+        verification_bgr = cv2.resize(verification_bgr,
+            (zoomed_mask.shape[1], zoomed_mask.shape[0]), interpolation=cv2.INTER_NEAREST)
+        if hasattr(_stone_v2, "filter_false_material_instances"):
+            regions, material_diagnostics = _stone_v2.filter_false_material_instances(
+                verification_bgr, display_mask, regions, zoom_scale=zoom_scale)
+            _stone_v2_diagnostics["material_verification"] = material_diagnostics
+        _stone_v2_diagnostics["stone_instance_count"] = len(regions)
+        if stone_v2_debug_dir is not None and _stone_v2_diagnostics.get("enabled"):
+            _stone_v2_debug_artifacts = _stone_v2.save_debug_artifacts(
+                stone_v2_debug_dir, color_measurement_bgr, zoomed_mask,
+                v2_candidates, regions)
 
     # Calculate accurate stone-area statistics from filled masks BEFORE
     # visualization so contour lines and overlays do not affect pixel counts.
@@ -5426,11 +5443,14 @@ def analyze_image_bgr(
     stone_v2_debug_dir: Path | None = None,
     stone_exclusion_mask: np.ndarray | None = None,
     original_color_bgr: np.ndarray | None = None,
+    verification_image_bgr: np.ndarray | None = None,
 ) -> dict:
     if original_color_bgr is not None and original_color_bgr.shape != image_bgr.shape:
         raise ValueError("Original color source must match analysis image coordinates")
     if stone_exclusion_mask is not None and stone_exclusion_mask.shape != image_bgr.shape[:2]:
         raise ValueError("Stone exclusion mask must match the analysis image")
+    if verification_image_bgr is not None and verification_image_bgr.shape != image_bgr.shape:
+        raise ValueError("Verification image must match analysis image coordinates")
     working_bgr, normalized_ignore_regions = apply_ignore_regions_to_image(image_bgr, ignore_regions)
     if preset_candidates is not None:
         jewels = list(preset_candidates)
@@ -5485,6 +5505,9 @@ def analyze_image_bgr(
         cx, cy, cw, ch = jewel["bbox_global"]
         color_source = image_bgr if original_color_bgr is None else original_color_bgr
         jewel["original_color_bgr"] = color_source[cy:cy+ch, cx:cx+cw]
+        verification_source = verification_image_bgr if verification_image_bgr is not None else original_color_bgr
+        if verification_source is not None:
+            jewel["verification_bgr"] = verification_source[cy:cy+ch, cx:cx+cw]
         if stone_exclusion_mask is not None:
             jewel = dict(jewel)
             x, y, w, h = jewel["bbox_global"]
