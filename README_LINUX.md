@@ -5,6 +5,9 @@ Deployment target: Ubuntu 22.04 or 24.04 LTS, 64-bit x86 PC, Python
 and V4L2 for the USB camera. ARM/Raspberry Pi needs separately verified wheels
 and models. Linux hardware operation must be verified on the target machine.
 
+On Ubuntu 26.04 LTS x86_64, use the [offline USB installation](README_OFFLINE.md)
+with its bundled Python 3.10 and version-matched system libraries.
+
 This parent project now contains the Linux developments and Windows support.
 Use `bash app.sh start` on Linux and `scripts/start_backend.ps1` on Windows.
 Hardware settings persist separately in `data/settings/app.json` under

@@ -105,11 +105,11 @@ def copy_project(target):
                "repair_scale_windows.ps1", "stop_backend.ps1", "verify_cpu.py", "setup_windows_offline.ps1",
                "start_windows_offline.ps1", "offline_runtime.py", "verify_offline_install.py", "test_offline_windows.ps1",
                "install_ubuntu_system_offline.sh", "audit_offline_wheels.py", "check_windows_offline_paths.py",
-               "verify_bundle_integrity.py"]
+               "verify_bundle_integrity.py", "setup_state.py"]
     (app / "scripts").mkdir(exist_ok=True)
     for name in scripts:
         shutil.copy2(ROOT / "scripts" / name, app / "scripts" / name)
-    for name in ["run.py", "requirements.txt", "startup.sh", "startbackend.sh", "startup_offline.sh",
+    for name in ["run.py", "requirements.txt", "app.sh", "startup.sh", "startbackend.sh", "startup_offline.sh",
                  "startbackend_offline.sh", "README.md", "README_LINUX.md", "README_OFFLINE.md"]:
         shutil.copy2(ROOT / name, app / name)
     copy_clean(ROOT / "data/settings", app / "data/settings")

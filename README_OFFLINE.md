@@ -12,6 +12,7 @@ weightScaleinstall/
     installers/                   Windows Python/VC runtime; Linux Python
     ubuntu-22.04-amd64/            Ubuntu 22.04 system packages
     ubuntu-24.04-amd64/            Ubuntu 24.04 system packages
+    ubuntu-26.04-amd64/            Ubuntu 26.04 system packages
   WEIGHT-INTEGRATION-APP/
     frontend/dist/                Built UI; no Node/npm installation needed
     Classification/               Local classifier weights and tokenizer
@@ -61,7 +62,7 @@ a valid weight reading. Unplugging and reconnecting also repeats detection;
 there is no need to assign COM12 in Device Manager. Keep other serial-monitor
 apps closed so this app can open the scale port.
 
-## Ubuntu 22.04/24.04 Intel/AMD x86_64
+## Ubuntu 22.04/24.04/26.04 Intel/AMD x86_64
 
 Use the normal operator account, not a root shell. Open a terminal in the copied
 `WEIGHT-INTEGRATION-APP` folder:
@@ -72,8 +73,9 @@ bash scripts/install_ubuntu_system_offline.sh
 
 This uses only the matching Ubuntu version's local `.deb` files. It requires sudo
 for system libraries and camera/serial access. Log out and back in afterwards.
-The installer stages the bundled archives in a temporary APT cache because
-`--no-download` also prevents APT from acquiring uncached local `.deb` files.
+The installer stages the bundled archives in a temporary directory. On Ubuntu
+26.04, APT resolves the dependencies using a temporary local repository so it
+can reuse compatible libraries already installed on the PC.
 To check the offline package plan without sudo or changing the system, run
 `bash scripts/install_ubuntu_system_offline.sh --check`.
 If an older installer ended with `Unable to fetch some archives`, rerun this
@@ -114,10 +116,11 @@ Selecting a model restores its own saved port and baud rate. Grams enable
 weight capture; carat readings are displayed without enabling gram capture.
 
 The installer extracts a bundled CPython 3.10.19 runtime into `.offline-python`
-and creates `.venv` from it. This avoids replacing Ubuntu 24.04's system Python
-3.12. Optionally set `PYTHON_BIN=/absolute/path/to/python3.10` to use an existing
-3.10 x64 installation. The online installation instructions about npm and
-rebuilding the frontend do not apply to this prebuilt offline deployment.
+and creates `.venv` from it. It leaves the system Python in place, including
+Python 3.14 on Ubuntu 26.04. If you already have 64-bit Python 3.10 and want to use
+it for a fresh install, run
+`PYTHON_BIN=/absolute/path/to/python3.10 bash app.sh install`.
+The prebuilt offline deployment uses the frontend on the USB.
 
 The `.deb` bundle contains official repository runtime packages and dependencies.
 APT validates compatibility with the actual target. It is forbidden to download
@@ -243,7 +246,8 @@ offline target:
 Wheel locks snapshot the working Python 3.10 deployment and explicitly select
 PyTorch/torchvision CPU wheels. Windows and Linux have separate locks. The bundle
 manifest records SHA-256 hashes and sizes. Each Ubuntu package is checked against
-the SHA-256 value in the official HTTPS repository package index. Preparation
+the SHA-256 value in the official HTTPS repository package index. Pass
+`--ubuntu 26.04` to the Ubuntu builder to collect only that release. Preparation
 logs and wheel dependency audit reports are included separately from app data.
 
 Before first setup, you can verify a copied bundle using any Python 3.10+:

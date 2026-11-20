@@ -55,23 +55,24 @@ install_online() {
 install_offline() {
     [[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]] || { echo 'Requires Ubuntu x86_64'; exit 1; }
     source /etc/os-release
-    [[ "$ID" == ubuntu && ( "$VERSION_ID" == 22.04 || "$VERSION_ID" == 24.04 ) ]] || { echo 'Supported: Ubuntu 22.04/24.04'; exit 1; }
+    [[ "$ID" == ubuntu && ( "$VERSION_ID" == 22.04 || "$VERSION_ID" == 24.04 || "$VERSION_ID" == 26.04 ) ]] || { echo 'Supported: Ubuntu 22.04/24.04/26.04'; exit 1; }
     for command in flock v4l2-ctl; do
         command -v "$command" >/dev/null || { echo "Missing $command. Run bash scripts/install_ubuntu_system_offline.sh first; it must finish successfully."; exit 1; }
     done
     export PIP_NO_INDEX=1 PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_CONFIG_FILE=/dev/null PYTHONDONTWRITEBYTECODE=1
     PACKAGES="$BUNDLE/linux-cp310"
     [[ -f "$PACKAGES/requirements-lock.txt" && -f frontend/dist/index.html ]] || { echo 'Missing wheel lock or built frontend'; exit 1; }
-    if [[ ! -x .offline-python/python/bin/python3 ]]; then
+    if [[ -z "${PYTHON_BIN:-}" && ! -x .offline-python/python/bin/python3 ]]; then
         mkdir -p .offline-python
         tar -xzf "$BUNDLE/installers/python-3.10.19-linux-x86_64.tar.gz" -C .offline-python
     fi
     PYTHON="${PYTHON_BIN:-$ROOT/.offline-python/python/bin/python3}"
-    "$PYTHON" -c 'import sys,struct; assert sys.version_info[:2] == (3,10) and struct.calcsize("P") == 8'
+    "$PYTHON" -c 'import sys,struct; assert sys.version_info[:2] == (3,10) and struct.calcsize("P") == 8, "Offline setup requires 64-bit Python 3.10 (bundled by default)"'
     if [[ ! -x .venv/bin/python ]]; then
         [[ ! -e .venv ]] || { echo 'Existing .venv is not a Linux environment. Move it aside.'; exit 1; }
         "$PYTHON" -m venv .venv
     fi
+    .venv/bin/python -c 'import sys; assert sys.version_info[:2] == (3,10), "Existing .venv must use Python 3.10. Move it aside and rerun installation."'
     .venv/bin/python scripts/setup_state.py --mode offline --invalidate
     .venv/bin/python -m pip --isolated install --no-index --no-cache-dir --no-compile --only-binary=:all: --find-links "$PACKAGES/wheels" -r "$PACKAGES/requirements-lock.txt"
     .venv/bin/python -m pip --isolated check

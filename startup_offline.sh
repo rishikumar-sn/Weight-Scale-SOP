@@ -7,7 +7,7 @@ cd -- "$ROOT"
 [[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]] || { echo 'Requires Ubuntu x86_64'; exit 1; }
 [[ $# -eq 0 || ( $# -eq 1 && "$1" == --setup-only ) ]] || { echo 'Usage: bash startup_offline.sh [--setup-only]'; exit 2; }
 source /etc/os-release
-[[ "$ID" == ubuntu && ( "$VERSION_ID" == 22.04 || "$VERSION_ID" == 24.04 ) ]] || { echo 'Supported: Ubuntu 22.04/24.04'; exit 1; }
+[[ "$ID" == ubuntu && ( "$VERSION_ID" == 22.04 || "$VERSION_ID" == 24.04 || "$VERSION_ID" == 26.04 ) ]] || { echo 'Supported: Ubuntu 22.04/24.04/26.04'; exit 1; }
 export PIP_NO_INDEX=1 PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_CONFIG_FILE=/dev/null PYTHONDONTWRITEBYTECODE=1
 PACKAGES="$BUNDLE/linux-cp310"
 [[ -f "$PACKAGES/requirements-lock.txt" && -f frontend/dist/index.html ]] || { echo 'Missing wheel lock or built frontend'; exit 1; }

@@ -1,7 +1,7 @@
 """Online builder: collect Ubuntu amd64 runtime .debs from official package indexes.
 
 Downloads the dependency closure (Depends/Pre-Depends, not Recommends).
-The target uses apt --no-download, which checks actual installed-system constraints.
+The target resolves packages with APT without using network repositories.
 """
 from __future__ import annotations
 
@@ -13,9 +13,12 @@ import json
 import lzma
 from pathlib import Path
 import re
+from tempfile import TemporaryDirectory
 import urllib.request
 
 from prepare_offline_bundle import fetch
+
+UBUNTU_RELEASES = {"22.04": "jammy", "24.04": "noble", "26.04": "resolute"}
 
 
 def order(c):
@@ -67,16 +70,15 @@ def index(cache, suite, component):
 
 
 def build(destination, codename, version):
-    cache = Path(__file__).resolve().parents[1] / "offline/build-logs/apt-indexes"
-    cache.mkdir(parents=True, exist_ok=True)
     records = {}
-    for suite in [codename, codename + "-updates", codename + "-security"]:
-        for component in ["main", "universe"]:
-            print("Reading", suite, component, flush=True)
-            for record in index(cache, suite, component):
-                name = record["Package"]
-                if name not in records or compare(record["Version"], records[name]["Version"]) > 0:
-                    records[name] = record
+    with TemporaryDirectory(prefix="weight-apt-indexes-") as cache:
+        for suite in [codename, codename + "-updates", codename + "-security"]:
+            for component in ["main", "universe"]:
+                print("Reading", suite, component, flush=True)
+                for record in index(Path(cache), suite, component):
+                    name = record["Package"]
+                    if name not in records or compare(record["Version"], records[name]["Version"]) > 0:
+                        records[name] = record
     providers = {}
     for record in records.values():
         for value in record.get("Provides", "").split(","):
@@ -110,7 +112,8 @@ def build(destination, codename, version):
     def download(record):
         url = "https://archive.ubuntu.com/ubuntu/" + record["Filename"]
         path = folder / Path(record["Filename"]).name
-        fetch(url, path)
+        request = urllib.request.Request(url, headers={"User-Agent": "WeightScaleOfflineBuilder/1.0"})
+        fetch(request, path)
         if hashlib.sha256(path.read_bytes()).hexdigest() != record["SHA256"]:
             raise RuntimeError(f"Ubuntu package hash mismatch: {path}")
         print(f"Ubuntu {version}: {record['Package']} OK", flush=True)
@@ -119,12 +122,16 @@ def build(destination, codename, version):
     with ThreadPoolExecutor(max_workers=4) as pool:
         manifest = list(pool.map(download, selected.values()))
     (folder / "packages.json").write_text(json.dumps({"ubuntu": version, "roots": roots, "packages": manifest}, indent=2), encoding="utf-8")
+    if codename == "resolute":
+        (folder / "roots.txt").write_bytes(("\n".join(roots) + "\n").encode("ascii"))
     print(f"Ubuntu {version}: {len(manifest)} packages downloaded and hash checked", flush=True)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--destination", type=Path, required=True)
+    parser.add_argument("--ubuntu", choices=UBUNTU_RELEASES, action="append",
+                        help="Build only this release (repeatable). Defaults to all supported releases.")
     args = parser.parse_args()
-    for codename, version in [("jammy", "22.04"), ("noble", "24.04")]:
-        build(args.destination, codename, version)
+    for version in args.ubuntu or UBUNTU_RELEASES:
+        build(args.destination, UBUNTU_RELEASES[version], version)
