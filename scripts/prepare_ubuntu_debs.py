@@ -122,8 +122,7 @@ def build(destination, codename, version):
     with ThreadPoolExecutor(max_workers=4) as pool:
         manifest = list(pool.map(download, selected.values()))
     (folder / "packages.json").write_text(json.dumps({"ubuntu": version, "roots": roots, "packages": manifest}, indent=2), encoding="utf-8")
-    if codename == "resolute":
-        (folder / "roots.txt").write_bytes(("\n".join(roots) + "\n").encode("ascii"))
+    (folder / "roots.txt").write_bytes(("\n".join(roots) + "\n").encode("ascii"))
     print(f"Ubuntu {version}: {len(manifest)} packages downloaded and hash checked", flush=True)
 
 

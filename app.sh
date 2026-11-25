@@ -91,18 +91,36 @@ fi
     echo 'Application is not installed. Run: bash app.sh install' >&2
     exit 1
 }
+if $OFFLINE && [[ "$EUID" != 0 ]]; then
+    active_groups=" $(id -nG) "
+    if [[ "$active_groups" != *" dialout "* || "$active_groups" != *" video "* ]]; then
+        configured_groups=" $(id -nG "$(id -un)") "
+        if [[ "$configured_groups" != *" dialout "* || "$configured_groups" != *" video "* ]]; then
+            echo 'Run scripts/install_ubuntu_system_offline.sh to configure camera and scale access.' >&2
+            exit 1
+        fi
+        if [[ "${WEIGHT_DEVICE_GROUP_RETRY:-}" == 1 ]] || ! command -v sg >/dev/null; then
+            echo 'Log out of Ubuntu and back in to activate camera and scale access.' >&2
+            exit 1
+        fi
+        # Re-enter from ROOT before taking the backend lock. sg preserves the user.
+        export WEIGHT_DEVICE_GROUP_RETRY=1
+        if [[ "$active_groups" == *" dialout "* ]]; then
+            exec sg video -c 'exec bash ./app.sh start'
+        elif [[ "$active_groups" == *" video "* ]]; then
+            exec sg dialout -c 'exec bash ./app.sh start'
+        else
+            exec sg video -c "exec sg dialout -c 'exec bash ./app.sh start'"
+        fi
+    fi
+fi
+unset WEIGHT_DEVICE_GROUP_RETRY
 command -v flock >/dev/null || { echo 'Missing flock. Follow README_LINUX.md for system prerequisites.' >&2; exit 1; }
 mkdir -p data
 # Preserve the descriptor across exec so only one process owns the hardware.
 exec 9>data/backend.lock
 flock -n 9 || { echo 'Backend already running for this checkout.' >&2; exit 1; }
 export PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONUTF8=1
-if $OFFLINE && [[ "$EUID" != 0 ]]; then
-    case " $(id -nG) " in
-        *" dialout "*) ;;
-        *) echo 'Run scripts/install_ubuntu_system_offline.sh, then log out and back in for scale access.' >&2; exit 1 ;;
-    esac
-fi
 .venv/bin/python - <<'PY'
 from pathlib import Path
 import os

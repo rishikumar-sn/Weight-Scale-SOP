@@ -73,14 +73,18 @@ bash scripts/install_ubuntu_system_offline.sh
 
 This uses only the matching Ubuntu version's local `.deb` files. It requires sudo
 for system libraries and camera/serial access. Log out and back in afterwards.
-The installer stages the bundled archives in a temporary directory. On Ubuntu
-26.04, APT resolves the dependencies using a temporary local repository so it
-can reuse compatible libraries already installed on the PC.
-To check the offline package plan without sudo or changing the system, run
-`bash scripts/install_ubuntu_system_offline.sh --check`.
-If an older installer ended with `Unable to fetch some archives`, rerun this
-updated installer; that error means system setup did not finish. The
-`automatically installed and are no longer required` message is informational.
+On all three releases, the installer selects the matching
+`offline/ubuntu-<version>-amd64` folder and builds a temporary local APT
+repository. APT reads the runtime package names from that folder's `roots.txt`,
+reuses compatible system packages and skips optional recommendations. Keep
+each `roots.txt` with its matching `.deb` files when copying the USB bundle.
+
+Run `bash scripts/install_ubuntu_system_offline.sh --check` to preview the
+package plan without sudo. If it reports an unmet dependency, use the package
+name and version in APT's output to refresh the matching bundle on a connected
+machine running the same Ubuntu release. After the preview passes, run the
+installer without `--check` to install packages and configure device access.
+The `automatically installed and are no longer required` message is informational.
 Then run:
 
 ```bash
@@ -96,6 +100,11 @@ exits. `app.sh start` starts the installed backend and opens the UI; it does
 not install packages or run installation smoke tests. The launcher automatically
 selects the offline bundle, so no separate offline command is needed. Node.js and
 npm are not needed for the bundled UI.
+
+If the terminal was open during system setup, the launcher activates your
+configured `video` and `dialout` groups for the app using Ubuntu's `sg` command.
+Run the launcher as your normal user. If group activation fails, open a fresh
+Ubuntu login session and run `bash app.sh start` again.
 
 Starting the backend still loads the AI libraries and models it needs. Keep the
 terminal open and wait for `Application startup complete`, then open
